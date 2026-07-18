@@ -1,0 +1,41 @@
+polling:
+  timezone: "America/New_York"
+  windows:
+    - {start: "09:10", end: "09:40", interval_sec: 15}
+    - {start: "15:30", end: "16:15", interval_sec: 15}
+    - {start: "09:00", end: "09:10", interval_sec: 120}
+    - {start: "09:40", end: "15:30", interval_sec: 120}
+  target_account: "kttechprivate"
+  monthly_api_call_ceiling: 10000
+  skip_market_holidays: true
+
+decision:
+  price_tolerance_pct: 10
+  take_profit_pct: 20
+  contracts_per_signal: 1
+  max_open_positions: 10
+  max_daily_spend_usd: 500
+  per_trade_max_spend_usd: 500
+
+execution:
+  paper_mode: true
+  robinhood_account_id: "<your_agentic_account_id>"
+  error_circuit_breaker_count: 3
+  zero_dte_market_sell_cutoff: "15:50"
+
+notifications:
+  events_enabled:
+    - alert
+    - add
+    - review
+    - executed
+    - paper
+    - skipped
+    - limit_sell_placed
+    - limit_sell_filled
+    - kill_switch
+    - error
+
+dashboard:
+  bind_address: "127.0.0.1"
+  port: 8420

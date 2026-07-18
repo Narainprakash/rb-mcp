@@ -1,0 +1,93 @@
+import os
+import sys
+from flask import Flask, jsonify, render_template
+from datetime import datetime
+import pytz
+
+# Add project root to sys.path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+
+from src.core.db import get_connection
+from src.core.config import config
+
+app = Flask(__name__)
+NY_TZ = pytz.timezone(config.polling.get("timezone", "America/New_York"))
+
+def dict_factory(cursor, row):
+    d = {}
+    for idx, col in enumerate(cursor.description):
+        d[col[0]] = row[idx]
+    return d
+
+def query_db(query, args=(), one=False):
+    conn = get_connection()
+    conn.row_factory = dict_factory
+    cur = conn.cursor()
+    cur.execute(query, args)
+    rv = cur.fetchall()
+    conn.close()
+    return (rv[0] if rv else None) if one else rv
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/api/health')
+def health():
+    halt_file_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "HALT")
+    kill_switch_active = os.path.exists(halt_file_path)
+    
+    # Check quota
+    now = datetime.now(NY_TZ)
+    start_of_month = f"{now.year}-{now.month:02d}-01 00:00:00"
+    api_calls = query_db("SELECT COUNT(*) as count FROM api_calls WHERE service = 'x' AND timestamp >= ?", (start_of_month,), one=True)
+    count = api_calls['count'] if api_calls else 0
+    limit = config.polling.get("monthly_api_call_ceiling", 10000)
+    
+    return jsonify({
+        "status": "halted" if kill_switch_active else "active",
+        "api_quota_used": count,
+        "api_quota_limit": limit,
+        "quota_pct": round((count / limit) * 100, 2)
+    })
+
+@app.route('/api/feed')
+def feed():
+    # Returns last 50 alerts, joined with decisions and trades
+    data = query_db("""
+        SELECT a.id, a.timestamp as alert_time, a.action, a.ticker, a.expiry, a.strike, a.option_type, a.price as rec_price,
+               d.action_taken, d.observed_price, d.reasoning,
+               t.status as trade_status, t.paper_mode
+        FROM alerts a
+        LEFT JOIN decisions d ON a.id = d.alert_id
+        LEFT JOIN trades t ON d.id = t.decision_id
+        ORDER BY a.id DESC LIMIT 50
+    """)
+    return jsonify(data)
+
+@app.route('/api/positions')
+def positions():
+    data = query_db("""
+        SELECT p.*, l.target_price, l.status as limit_status 
+        FROM positions p
+        LEFT JOIN limit_orders l ON p.id = l.position_id AND l.status = 'pending'
+        WHERE p.status = 'open'
+    """)
+    return jsonify(data)
+
+@app.route('/api/history')
+def history():
+    # Last 50 closed limit orders
+    data = query_db("""
+        SELECT l.*, p.ticker, p.expiry, p.strike, p.option_type, p.total_quantity, p.average_cost 
+        FROM limit_orders l
+        JOIN positions p ON l.position_id = p.id
+        WHERE l.status = 'filled'
+        ORDER BY l.fill_timestamp DESC LIMIT 50
+    """)
+    return jsonify(data)
+
+if __name__ == '__main__':
+    bind = config.dashboard.get("bind_address", "127.0.0.1")
+    port = config.dashboard.get("port", 8420)
+    app.run(host=bind, port=port, debug=True)

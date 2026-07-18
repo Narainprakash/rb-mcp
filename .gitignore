@@ -1,0 +1,27 @@
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Database
+hermes.db
+*.sqlite3
+
+# Python Virtual Environment
+venv/
+env/
+.venv/
+
+# State files
+.since_id
+HALT
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# OS Files
+.DS_Store
+Thumbs.db
