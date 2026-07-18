@@ -169,3 +169,22 @@ To securely access the web dashboard without opening ports:
 3. Create a tunnel: `cloudflared tunnel create hermes-dash`
 4. Route traffic: Configure the tunnel to route to `http://127.0.0.1:8420`.
 5. Run the tunnel as a systemd service.
+
+---
+
+## 3. Nous Hermes Agent Integration (Optional)
+
+This trading bot can act as a fully autonomous "Skill" or "Tool" for the open-source **NousResearch/hermes-agent** framework. This allows you to chat with the Nous Hermes Agent via Telegram or Discord to monitor and manage your trading bot in natural language.
+
+### How to Integrate:
+1. Ensure your Nous Hermes Agent is running on the same VPS (or has access to this project's directory).
+2. We have provided custom Python tools inside the `src/hermes_agent_tools/trading_manager.py` file.
+3. Depending on your Nous Hermes Agent setup (e.g., Langchain, LlamaIndex, or raw Python functions), you can import and register these tools in your agent's tool registry.
+4. The provided tools include:
+   - `get_open_positions()`
+   - `get_todays_realized_pnl()`
+   - `get_system_status()`
+   - `trigger_kill_switch()`
+   - `resume_trading()`
+
+Once registered, you can simply text your Hermes Agent: *"Halt the trading bot!"* or *"What is my PnL today?"* and it will use these tools to execute the command directly on your database.
