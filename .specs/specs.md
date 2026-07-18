@@ -1,7 +1,9 @@
 # Project Hermes — Signal-Driven Options Trading Agent
-### Technical Specification v1.0
+### Technical Specification v2.0
 
 **Purpose of this document:** feed this to your dev LLM (or use it yourself) as the source of truth for building Hermes on your VPS. It defines scope, architecture, data contracts, security controls, and open decisions. Sections marked **[DECISION NEEDED]** must be resolved by you (the account owner) before implementation — they involve risk limits or legal/ToS judgment calls the LLM shouldn't make on its own.
+
+**Runtime platform:** This project runs on the [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) open-source AI agent framework. The Hermes Agent provides the LLM reasoning layer, persistent memory, Telegram/Discord gateway, cron scheduling, and tool execution runtime. The trading pipeline components (Poller, Parser, Decision Engine, Executor) are registered as **custom tools** within this framework.
 
 ---
 
@@ -18,7 +20,7 @@ These are facts, not assumptions — build against them:
 
 ## 1. System Overview
 
-Hermes is a self-hosted agent running on your VPS that:
+Hermes is a self-hosted agent running on the [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) framework on your VPS that:
 
 1. Polls a single X account (`@kttechprivate`) on a configurable cadence, looking for `#ALERT` posts.
 2. Parses each alert into a structured trade signal (ticker, expiry, strike, type, action, price, sizing notes).
@@ -27,55 +29,65 @@ Hermes is a self-hosted agent running on your VPS that:
 5. Places a limit sell order at a configurable profit target (default 20%) and monitors it.
 6. Sends a Discord notification at each meaningful event (alert seen, trade decision, trade executed/skipped, limit sell filled).
 7. Logs everything to a database and exposes it via a secure, externally-accessible web dashboard.
-8. Can be killed instantly, globally or per-component, at any time.
+8. Can be killed instantly — via SSH, Telegram/Discord message to the agent, or Robinhood-side disconnect — at any time.
+9. Provides a conversational AI interface (via Telegram/Discord/CLI) powered by an LLM of your choice (via OpenRouter) to query positions, P/L, and system status in natural language.
 
 ### 1.1 High-Level Architecture
 
 ```
-+------------------+     +-------------------+     +--------------------+
-|  Poller          |---->|  Alert Parser      |---->|  Decision Engine    |
-|  (X API client)  |     |  (regex-based,     |     |  (price tolerance,  |
-|  cadence-aware   |     |   zero-latency)    |     |   position sizing)  |
-+------------------+     +-------------------+     +----------+---------+
-                                                                |
-                    +-------------------------------------------+------------+
-                    v                                           v            |
-          +-------------------+                       +--------------------+ |
-          | Discord Notifier   |                       | Trade Executor      | |
-          | (alert + trade     |<----------------------| (Robinhood MCP,     | |
-          |  events)           |                       |  paper mode flag)   | |
-          +-------------------+                       +----------+---------+ |
-                                                                   |          |
-                                                        +----------+---------+
-                                                        | Limit Sell Monitor  |
-                                                        | (tracks open sell   |
-                                                        |  orders, logs fills)|
-                                                        +----------+---------+
-                                                                   |          |
-                                                                   v          |
-                                                         +--------------------+
-                                                         |  Trade/Event Log   |
-                                                         |  (SQLite)          |<-+
-                                                         +----------+---------+
-                                                                    |
-                                                                    v
-                                                         +--------------------+
-                                                         |  Web Dashboard      |
-                                                         |  (read-only,        |
-                                                         |   Cloudflare Tunnel)|
-                                                         +--------------------+
++=======================================================================+
+|  NousResearch/hermes-agent (Runtime Platform)                         |
+|  - LLM reasoning (via OpenRouter)                                     |
+|  - Telegram/Discord/CLI gateway                                       |
+|  - Persistent memory & skill learning                                  |
+|  - Cron scheduler                                                      |
+|                                                                        |
+|   Registered Custom Tools (trading pipeline):                          |
+|   +------------------+   +-------------------+   +-------------------+ |
+|   | Poller           |-->| Alert Parser      |-->| Decision Engine   | |
+|   | (X API client,   |   | (regex-based,     |   | (price tolerance, | |
+|   |  cadence-aware)  |   |  zero-latency)    |   |  position sizing) | |
+|   +------------------+   +-------------------+   +--------+----------+ |
+|                                                            |            |
+|   +-------------------+                          +---------+----------+ |
+|   | Discord Notifier  |<-------------------------| Trade Executor     | |
+|   | (webhook-based)   |                          | (Robinhood MCP,    | |
+|   +-------------------+                          |  paper mode flag)  | |
+|                                                  +---------+----------+ |
+|                                                            |            |
+|                                                  +---------+----------+ |
+|                                                  | Limit Sell Monitor | |
+|                                                  +--------+-----------+ |
+|                                                           |             |
+|   +-------------------------------------------------------v-----------+ |
+|   |  Trade/Event Log (SQLite)                                         | |
+|   +-------------------------------------------------------------------+ |
+|                                                                        |
+|   +-------------------------------------------------------------------+ |
+|   |  Conversational Manager Tools (read DB, kill switch, PnL)         | |
+|   +-------------------------------------------------------------------+ |
++=======================================================================+
 
-          +----------------------------------------------------------+
-          |  Kill Switch / Control Plane (highest priority path)      |
-          |  -- can halt Poller, Executor, or entire system            |
-          +----------------------------------------------------------+
+  External (separate systemd service, optional):
+  +--------------------+
+  |  Web Dashboard     |
+  |  (read-only Flask, |
+  |   Cloudflare Tunnel)|
+  +--------------------+
+
+  Kill Switch Paths (independent, redundant):
+  1. SSH:      touch ~/hermes-trading/HALT
+  2. Agent:    "Halt the trading bot" via Telegram/Discord/CLI
+  3. Robinhood: Account-level disconnect in app
 ```
 
 ### 1.2 Deployment Model
 
-- Each box above is a separate systemd service (or Docker container) — not one monolithic script. This is what makes it "modular": you can kill the Executor while leaving the Poller/Notifier running, for example.
-- Shared state (signals, decisions, trades, config) lives in a single database, not in-memory, so services can restart independently without losing state.
-- A lightweight message queue or simply a shared DB table with a `status` column is enough to connect the pipeline stages — no need for Kafka/RabbitMQ at this scale.
+- **Single agent process**: The NousResearch/hermes-agent runs as one persistent `systemd` service. The trading pipeline components (Poller, Parser, Decision Engine, Executor, Notifier) are registered as **custom tools** within this single process — not separate services.
+- **Optional separate dashboard**: The read-only Flask web dashboard runs as a separate lightweight `systemd` service (`hermes-dash`) to keep the trading engine performance isolated.
+- Shared state (signals, decisions, trades, config) lives in a SQLite database, not in-memory, so the agent and dashboard can access it independently.
+- A shared DB table with a `status` column connects the pipeline stages — no need for Kafka/RabbitMQ at this scale.
+- The custom Python polling loop (not the Hermes cron scheduler) is used for the 15-second cadence, since the Hermes built-in cron has a 1-minute minimum granularity.
 
 ---
 
@@ -264,7 +276,40 @@ Config: webhook URL, per-event-type on/off toggles, and a rate limit (so a burst
 
 ## 8. Configuration System
 
-Single YAML (or `.env` + YAML) file, hot-reloadable where safe, version-controlled separately from secrets:
+This project has **two separate configuration layers**:
+
+### 8.1 Hermes Agent Configuration (`~/.hermes/`)
+
+The NousResearch/hermes-agent framework stores its own configuration at `~/.hermes/`. This controls the AI brain, not the trading logic.
+
+**`~/.hermes/config.yaml`** — LLM provider, model, gateway platforms, tool discovery:
+```yaml
+model:
+  provider: openrouter
+  default: "nousresearch/hermes-3-llama-3.1-405b"  # or any model on openrouter.ai/models
+
+skills:
+  external_dirs:
+    - ~/hermes-trading/src/hermes_agent_tools  # Point to the trading tools
+```
+
+**`~/.hermes/.env`** — Agent-level secrets:
+```
+OPENROUTER_API_KEY=sk-or-your-actual-key-here
+```
+
+You can also configure this interactively:
+```bash
+hermes model          # Select OpenRouter, paste API key, pick model
+hermes gateway setup  # Connect Telegram/Discord for remote access
+hermes doctor         # Verify all connections are healthy
+```
+
+Switch models on the fly inside the chat: `/model anthropic/claude-sonnet-4-20250514`
+
+### 8.2 Trading Bot Configuration (`<project_root>/`)
+
+The trading-specific config lives in the project directory, separate from the agent config. Hot-reloadable where safe, version-controlled separately from secrets:
 
 ```yaml
 polling:
@@ -300,9 +345,21 @@ dashboard:
   bind_address: "127.0.0.1"
   port: 8420
   # External access via Cloudflare Tunnel (see Section 7.3)
+
+gateway:
+  authorized_telegram_user: "Prakash_1803"  # Only this Telegram user can interact with the agent
 ```
 
-Secrets (X API keys, Discord webhook URL, Robinhood credentials/tokens) live in a separate `.env` file with `chmod 600` — **never** in the YAML that might get committed to git or pasted into an LLM chat.
+**`<project_root>/.env`** — Trading-level secrets (Twitter, Discord, Robinhood):
+```
+TWITTER_BEARER_TOKEN=your_twitter_bearer_token
+DISCORD_WEBHOOK_URL=your_discord_webhook_url
+ROBINHOOD_USERNAME=
+ROBINHOOD_PASSWORD=
+ROBINHOOD_MFA_CODE=
+```
+
+Both `.env` files must have `chmod 600` permissions — **never** commit secrets to git or paste into an LLM chat.
 
 ---
 
@@ -312,14 +369,15 @@ Treat this section as non-negotiable regardless of how the rest gets built.
 
 ### 9.1 Kill Switches (multiple, redundant, independent of each other)
 
-1. **Global halt file** — the simplest and most robust: every service checks for the existence of a file (e.g. `/opt/hermes/HALT`) at the top of every loop iteration and before every trade submission. Creating that file with `touch` from any SSH session instantly stops everything, even if the dashboard or Discord bot is itself broken. This should be your primary, always-available switch.
-2. **Discord kill command** — a slash command or a specific message in the channel (e.g. `!hermes halt`) that the notifier service watches for and translates into creating the halt file. Convenient, but treat it as secondary to #1 since it depends on more moving parts (bot connectivity, Discord uptime).
+1. **Global halt file** — the simplest and most robust: every tool checks for the existence of a file (e.g. `~/hermes-trading/HALT`) at the top of every loop iteration and before every trade submission. Creating that file with `touch` from any SSH session instantly stops everything, even if the agent or Discord is broken. This should be your primary, always-available switch.
+2. **Hermes Agent conversational kill switch** — You message the agent via Telegram, Discord, or CLI: *"Stop all trading immediately."* The agent calls the `trigger_kill_switch()` custom tool which creates the `HALT` file. This is the most user-friendly path and works from anywhere with a phone signal. It depends on the agent process being healthy, so treat it as secondary to #1.
 3. **Robinhood-side disconnect** — Robinhood's own agentic trading product includes an account-level disconnect/pause control as a third, independent layer outside Hermes entirely — worth knowing that even if your VPS is fully compromised, you can cut Hermes off from your Robinhood funds directly in the Robinhood app.
 4. **Granular halts** — separate flags for "stop new trades" vs "stop polling" vs "stop everything," since e.g. you might want to keep watching for alerts and logging without letting anything execute.
 
 ### 9.2 Access Controls
 
 - SSH: key-based auth only, disable password auth once the box is set up (you mentioned a root password — rotate to key-based access and disable root SSH login entirely, use a sudo user instead).
+- **Telegram gateway**: The Hermes Agent's Telegram gateway must be configured to accept commands **only** from the authorized user defined in `config.yaml` → `gateway.authorized_telegram_user` (default: `Prakash_1803`). Any messages from other Telegram users must be ignored. This prevents unauthorized parties from issuing kill switch commands or querying trade data.
 - Principle of least privilege: the Executor service's Robinhood credentials should only ever touch the dedicated agentic account, never your main brokerage account.
 - Secrets stored with restrictive file permissions (`600`), owned by the service user, not root, not world-readable.
 - Dashboard behind auth (Section 7.3).
@@ -342,11 +400,11 @@ Treat this section as non-negotiable regardless of how the rest gets built.
 ## 10. Build Phases (suggested order for your dev LLM)
 
 1. **Phase 0** — Config system + halt-file kill switch + logging DB schema + parser unit tests (foundation everything else depends on)
-2. **Phase 1** — Poller + Parser, paper-mode only, Discord notifications for alerts (no trading yet) — validate parsing accuracy against real tweets for a few days before touching money
+2. **Phase 1** — Poller + Parser, paper-mode only, Discord webhook notifications for alerts (no trading yet) — validate parsing accuracy against real tweets for a few days before touching money
 3. **Phase 2** — Decision Engine + paper-trade Executor + limit sell simulation — validate the price-tolerance logic, take-profit logic, and position tracking against real signals, still no live orders
-4. **Phase 3** — Dashboard (read-only views of Phase 1–2 data) + Cloudflare Tunnel setup for external access
-5. **Phase 4** — Live Executor behind explicit `paper_mode: false` flag, starting with `max_daily_spend_usd` set very low, raised deliberately over time
-6. **Phase 5** — Nous Hermes Agent Integration: Building custom Python tools to expose the trading bot's state and kill switch to the conversational agent framework.
+4. **Phase 3** — Nous Hermes Agent Integration: Install the framework on VPS, register custom tools, connect Telegram gateway. This gives you real-time conversational access to positions and kill switch from your phone — no web dashboard needed yet.
+5. **Phase 4** — Dashboard (read-only views of Phase 1–3 data, optional) + Cloudflare Tunnel setup for historical analysis views
+6. **Phase 5** — Live Executor behind explicit `paper_mode: false` flag, starting with `max_daily_spend_usd` set very low, raised deliberately over time
 7. **Phase 6** — Hardening: circuit breakers, error alerting, granular kill switches, SSH lockdown, VPS firewall rules
 
 Recommend running Phase 1–3 for at least a week or two of live market hours before flipping `paper_mode: false`, so you have real parse-accuracy and decision-accuracy data before any real money is at risk.
@@ -355,22 +413,116 @@ Recommend running Phase 1–3 for at least a week or two of live market hours be
 
 ## 11. Nous Hermes Agent Integration
 
-The Hermes Trading bot integrates directly with the [NousResearch/hermes-agent](https://github.com/nousresearch/hermes-agent) framework via the **Manager Pattern**. 
-This architecture allows the bot to retain its zero-latency regex execution speed in the background, while providing a conversational AI interface (via Telegram/Discord) for you to monitor and control it.
+The Hermes Trading bot runs on the [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) framework via the **Manager Pattern**. The trading pipeline (Poller, Parser, Decision Engine, Executor) runs as a background daemon thread with zero-latency regex parsing. The Hermes Agent wraps this pipeline and provides a conversational AI interface (via Telegram/Discord/CLI) to monitor and control it.
 
-Custom Tools are provided in `src/hermes_agent_tools/trading_manager.py` that allow the Nous Hermes Agent to:
-- `get_open_positions()`
-- `get_todays_realized_pnl()`
-- `get_system_status()` (API Quota tracking)
-- `trigger_kill_switch()` (Creates the `HALT` file)
-- `resume_trading()` (Removes the `HALT` file)
+### 11.1 Custom Tool Registration
 
-To deploy this, you register these tools in your Nous Hermes Agent's tool registry. You can then chat with the agent to manage your trades naturally (e.g., *"Halt the trading bot!"* or *"What is my PnL today?"*).
+Custom tools are placed in `src/hermes_agent_tools/` and registered with the Hermes Agent framework. There are two supported registration methods:
+
+**Method A — Custom Tools directory (recommended for Python logic):**
+Symlink or copy the tools into the Hermes Agent's custom tools directory:
+```bash
+ln -s ~/hermes-trading/src/hermes_agent_tools ~/.hermes/custom_tools/hermes-trading
+```
+Files with a `registry.register()` call are auto-discovered at agent startup.
+
+**Method B — External skills directory:**
+Add the tools directory to `~/.hermes/config.yaml`:
+```yaml
+skills:
+  external_dirs:
+    - ~/hermes-trading/src/hermes_agent_tools
+```
+
+### 11.2 Available Tools
+
+The following tools are provided in `src/hermes_agent_tools/trading_manager.py`:
+
+| Tool | Description | Example prompt |
+|---|---|---|
+| `get_open_positions()` | Returns all open option positions from SQLite | *"What positions are we holding?"* |
+| `get_todays_realized_pnl()` | Calculates today's realized P/L | *"How much did we make today?"* |
+| `get_system_status()` | Reports bot status and API quota usage | *"Is the bot running?"* |
+| `trigger_kill_switch()` | Creates the `HALT` file, halting all trading | *"Stop all trading immediately."* |
+| `resume_trading()` | Removes the `HALT` file, resuming operations | *"Resume the trading bot."* |
+
+Each function has a detailed docstring so the LLM knows when to call it based on your natural language request.
+
+### 11.3 LLM Configuration (OpenRouter)
+
+The Nous Hermes Agent framework is model-agnostic. You configure it to use the LLM of your choice via **OpenRouter**.
+
+**Step 1 — Store API key** in `~/.hermes/.env`:
+```
+OPENROUTER_API_KEY=sk-or-your-actual-key-here
+```
+
+**Step 2 — Configure provider** in `~/.hermes/config.yaml`:
+```yaml
+model:
+  provider: openrouter
+  default: "nousresearch/hermes-3-llama-3.1-405b"  # or any model from openrouter.ai/models
+```
+
+**Or use the interactive CLI:**
+```bash
+hermes model    # Select OpenRouter → paste API key → pick model
+```
+
+**Switch models on the fly** (no restart required) — type inside the Hermes chat:
+```
+/model anthropic/claude-sonnet-4-20250514
+```
+
+This gives you full control over the reasoning engine acting as your conversational manager, completely independent of the trading bot's hardcoded execution logic. Browse available models at [openrouter.ai/models](https://openrouter.ai/models).
+
+### 11.4 VPS Installation Steps
+
+```bash
+# 1. Install Hermes Agent on VPS
+curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
+source ~/.bashrc
+
+# 2. Configure LLM provider (interactive)
+hermes model    # Select OpenRouter, enter API key, pick model
+
+# 3. Clone the trading bot repo
+git clone git@github.com:Narainprakash/rb-mcp.git ~/hermes-trading
+cd ~/hermes-trading
+pip install -r requirements.txt
+
+# 4. Set up trading secrets
+cp .env.example .env
+nano .env              # Fill in Twitter, Discord, Robinhood tokens
+chmod 600 .env
+
+# 5. Register custom tools with the agent
+ln -s ~/hermes-trading/src/hermes_agent_tools ~/.hermes/custom_tools/hermes-trading
+
+# 6. Connect messaging gateway
+hermes gateway setup   # Connect Telegram and/or Discord
+
+# 7. Verify everything
+hermes doctor
+```
+
+### 11.5 Discord Notifications vs Agent Gateway
+
+The trading bot uses a direct Discord webhook (Section 6) for trade notifications. This is intentional:
+- **Webhook notifications** are lightweight, have zero LLM cost, and fire reliably even if the agent's LLM is slow or down.
+- **Hermes Agent gateway** is for interactive, conversational queries ("What's my PnL?", "Halt trading.") — these require LLM reasoning.
+
+Both paths coexist. The webhook is the primary notification channel; the agent gateway is the interactive management channel.
 
 ---
 
 ## 12. Final Pre-Flight Checklist (before dev starts)
 
+- [ ] Install Hermes Agent on VPS: `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`
+- [ ] Create an OpenRouter account and obtain an API key from [openrouter.ai/keys](https://openrouter.ai/keys)
+- [ ] Run `hermes model` to configure OpenRouter as the LLM provider and select your preferred model
+- [ ] Run `hermes gateway setup` to connect Telegram for remote access (authorized user: `@Prakash_1803`)
+- [ ] Run `hermes doctor` to verify all connections are healthy
 - [ ] Confirm options trading is actually enabled on your Robinhood agentic account via MCP (if not, Phase 1–3 run paper-only)
 - [ ] Confirm your Twitter API Basic tier is active (the 480 calls/day fits the 10K/month limit cleanly)
 - [ ] Set up Cloudflare Tunnel (or alternative) for dashboard external access
