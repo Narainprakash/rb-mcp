@@ -346,13 +346,30 @@ Treat this section as non-negotiable regardless of how the rest gets built.
 3. **Phase 2** — Decision Engine + paper-trade Executor + limit sell simulation — validate the price-tolerance logic, take-profit logic, and position tracking against real signals, still no live orders
 4. **Phase 3** — Dashboard (read-only views of Phase 1–2 data) + Cloudflare Tunnel setup for external access
 5. **Phase 4** — Live Executor behind explicit `paper_mode: false` flag, starting with `max_daily_spend_usd` set very low, raised deliberately over time
-6. **Phase 5** — Hardening: circuit breakers, error alerting, granular kill switches, SSH lockdown, VPS firewall rules
+6. **Phase 5** — Nous Hermes Agent Integration: Building custom Python tools to expose the trading bot's state and kill switch to the conversational agent framework.
+7. **Phase 6** — Hardening: circuit breakers, error alerting, granular kill switches, SSH lockdown, VPS firewall rules
 
 Recommend running Phase 1–3 for at least a week or two of live market hours before flipping `paper_mode: false`, so you have real parse-accuracy and decision-accuracy data before any real money is at risk.
 
 ---
 
-## 11. Final Pre-Flight Checklist (before dev starts)
+## 11. Nous Hermes Agent Integration
+
+The Hermes Trading bot integrates directly with the [NousResearch/hermes-agent](https://github.com/nousresearch/hermes-agent) framework via the **Manager Pattern**. 
+This architecture allows the bot to retain its zero-latency regex execution speed in the background, while providing a conversational AI interface (via Telegram/Discord) for you to monitor and control it.
+
+Custom Tools are provided in `src/hermes_agent_tools/trading_manager.py` that allow the Nous Hermes Agent to:
+- `get_open_positions()`
+- `get_todays_realized_pnl()`
+- `get_system_status()` (API Quota tracking)
+- `trigger_kill_switch()` (Creates the `HALT` file)
+- `resume_trading()` (Removes the `HALT` file)
+
+To deploy this, you register these tools in your Nous Hermes Agent's tool registry. You can then chat with the agent to manage your trades naturally (e.g., *"Halt the trading bot!"* or *"What is my PnL today?"*).
+
+---
+
+## 12. Final Pre-Flight Checklist (before dev starts)
 
 - [ ] Confirm options trading is actually enabled on your Robinhood agentic account via MCP (if not, Phase 1–3 run paper-only)
 - [ ] Confirm your Twitter API Basic tier is active (the 480 calls/day fits the 10K/month limit cleanly)
