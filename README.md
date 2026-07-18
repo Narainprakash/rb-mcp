@@ -5,6 +5,7 @@ Hermes is a self-hosted agent that polls an X (Twitter) account for options trad
 ## Features
 - **Zero-Latency Parsing**: Uses pure regex to parse highly structured signals, completely avoiding LLM latency and cost.
 - **Strict Risk Controls**: Enforces maximum daily spend, per-trade limits, and maximum open positions.
+- **Discount Limit Buys**: If the live market ask is cheaper than the alert price, the bot places a limit buy order at a configurable discount (e.g., 20% lower) to catch dips, rather than buying at market.
 - **Automated Take-Profit**: Automatically places configurable limit sell orders (e.g., 20% profit target) upon execution.
 - **0DTE Protection**: Auto-cancels and market-sells open 0DTE limit orders at 15:50 ET to avoid total loss.
 - **Hard Kill Switch**: An instant global kill switch via a simple `HALT` file presence check that immediately stops all trading.

@@ -56,9 +56,12 @@ def compute_decision(alert_id: int, recommended_price: float, live_ask: float):
         reason = "maximum open positions limit reached"
         return "skip", reason
 
-    if live_ask <= max_price:
+    if live_ask < recommended_price:
+        reason = f"ask {live_ask} is below recommended {recommended_price}. Will place discount limit buy."
+        return "limit_buy", reason
+    elif live_ask <= max_price:
         reason = f"ask {live_ask} is within tolerance of {max_price} (rec {recommended_price})"
-        return "buy", reason
+        return "market_buy", reason
     else:
         reason = f"ask {live_ask} exceeds {max_price} (+{tolerance_pct}% tolerance)"
         notify_skipped(live_ask, recommended_price, tolerance_pct)

@@ -66,6 +66,20 @@ CREATE TABLE IF NOT EXISTS limit_orders (
     FOREIGN KEY(position_id) REFERENCES positions(id)
 );
 
+CREATE TABLE IF NOT EXISTS limit_buy_orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    decision_id INTEGER NOT NULL,
+    alert_id INTEGER NOT NULL,
+    buy_order_id TEXT,
+    target_price REAL NOT NULL,
+    quantity INTEGER NOT NULL,
+    status TEXT NOT NULL, -- 'pending', 'filled', 'cancelled'
+    fill_timestamp DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(decision_id) REFERENCES decisions(id),
+    FOREIGN KEY(alert_id) REFERENCES alerts(id)
+);
+
 CREATE TABLE IF NOT EXISTS api_calls (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     service TEXT NOT NULL, -- 'x' or 'robinhood'

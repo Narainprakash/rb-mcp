@@ -12,6 +12,7 @@ polling:
 decision:
   price_tolerance_pct: 10
   take_profit_pct: 20
+  limit_buy_discount_pct: 20
   contracts_per_signal: 1
   max_open_positions: 10
   max_daily_spend_usd: 500
@@ -31,6 +32,7 @@ notifications:
     - executed
     - paper
     - skipped
+    - limit_buy_placed
     - limit_sell_placed
     - limit_sell_filled
     - kill_switch

@@ -4,13 +4,13 @@ from src.core.db import init_db, get_connection
 from src.services.poller import start_poller
 from src.services.decision import compute_decision, log_decision
 from src.services.executor import execute_trade, get_live_quote
-from src.services.monitor import process_limit_sells
+from src.services.monitor import process_open_orders
 from src.core.security import check_kill_switch
 
 def trade_loop():
     """
     Independent loop that reads unprocessed alerts from the database,
-    makes trading decisions, executes them, and monitors limit sells.
+    makes trading decisions, executes them, and monitors open orders.
     """
     print("Starting Hermes Trade & Execution Loop...")
     while True:
@@ -44,18 +44,21 @@ def trade_loop():
                 decision_id = log_decision(alert['id'], alert['price'], live_ask, action, reasoning)
                 
                 # Execute if within tolerance and limits
-                if action == "buy":
+                if action in ("market_buy", "limit_buy"):
                     execute_trade(
                         decision_id=decision_id,
+                        alert_id=alert['id'],
                         ticker=alert['ticker'], 
                         expiry=alert['expiry'], 
                         strike=alert['strike'], 
                         option_type=alert['option_type'], 
-                        action=alert['action']
+                        signal_action=alert['action'],
+                        decision_action=action,
+                        recommended_price=alert['price']
                     )
             
-            # 3. Monitor and process open limit sell orders
-            process_limit_sells()
+            # 3. Monitor and process open orders (limit sells and limit buys)
+            process_open_orders()
             
             conn.close()
             

@@ -48,6 +48,10 @@ def notify_limit_sell_placed(quantity, ticker, strike, option_type, price, pct):
     msg = f"LIMIT SELL PLACED — {quantity}x ${ticker} {strike}{option_type} @ {price} ({pct}% target)"
     send_discord_message("limit_sell_placed", msg)
 
+def notify_limit_buy_placed(quantity, ticker, strike, option_type, price, pct):
+    msg = f"LIMIT BUY PLACED — {quantity}x ${ticker} {strike}{option_type} @ {price} ({pct}% discount)"
+    send_discord_message("limit_buy_placed", msg)
+
 def notify_limit_sell_filled(quantity, ticker, strike, option_type, price, pnl_dollars, pnl_pct):
     msg = f"SOLD — {quantity}x ${ticker} {strike}{option_type} @ {price} — P/L: ${pnl_dollars} (+{pnl_pct}%)"
     send_discord_message("limit_sell_filled", msg)

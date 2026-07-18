@@ -176,13 +176,18 @@ This encodes the rule you described:
 ```
 recommended_price = alert.recommended_price   # e.g. 1.81 for BTO, or the extracted AVG price for ADD
 
-if market_ask <= recommended_price:
-    -> BUY 1 contract
+if market_ask < recommended_price:
+    -> LIMIT BUY 1 contract at (recommended_price * (1 - limit_buy_discount_pct / 100))
 elif market_ask <= recommended_price * 1.10:
-    -> BUY 1 contract   # up to 10% above recommended
+    -> MARKET BUY 1 contract   # up to 10% above recommended
 else:
     -> SKIP, log as "price_exceeded_tolerance" (more than 10% higher)
 ```
+
+**Discount Limit Buy Logic**:
+- If the live market ask is cheaper than the alert's recommended price, the bot will place a pending limit buy order at a discount (default 20% below the recommended price) rather than executing immediately.
+- The `monitor.py` loop watches these pending buy orders. If the ask drops to the target price, the order fills, the position updates, and the take-profit sell order is placed.
+- **0DTE Cutoff**: Pending limit buy orders for 0DTE options are automatically cancelled at 15:50 ET to avoid entering a trade right before expiration.
 
 **Take Profit (Limit Sell) Logic**:
 - Once a buy order (BTO or ADD) is filled, the engine must immediately calculate the target sell price: `target_sell_price = fill_price * (1 + take_profit_pct / 100)` (default 20% profit).
@@ -196,7 +201,8 @@ else:
 - **0DTE End of Day Rule**: If a limit sell order for a `0DTE` option is still open at a configurable cutoff time (default 15:50 ET), the Executor must cancel the limit sell and immediately execute a **Market Sell** to salvage any remaining premium.
 
 Configurable parameters (Section 8), not hardcoded:
-- `price_tolerance_pct` (default 10%)
+- `price_tolerance_pct` (default 10%) — max acceptable markup for a market buy.
+- `limit_buy_discount_pct` (default 20%) — discount target for a limit buy when the market is cheaper than the alert.
 - `take_profit_pct` (default 20%) — target profit for the limit sell order.
 - `contracts_per_signal` (default 1) — Defaults to 1 for both BTO and ADD based on your specifications, but kept configurable.
 - `max_open_positions` — cap on simultaneous option positions
