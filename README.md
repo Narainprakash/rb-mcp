@@ -18,18 +18,23 @@ Hermes is a self-hosted agent that polls an X (Twitter) account for options trad
 - SQLite3 (built-in with Python)
 
 ### Installation
-1. Clone the repository:
+1. First, create a private repository on GitHub (e.g., `hermes-agent`).
+2. If you haven't already, initialize this local directory and push the code:
    ```bash
-   git clone <your-repo-url>
-   cd hermes
+   git init
+   git add .
+   git commit -m "Initial commit"
+   git branch -M main
+   git remote add origin https://github.com/<your-username>/hermes-agent.git
+   git push -u origin main
    ```
-2. Create a virtual environment and install dependencies:
+3. Create a virtual environment and install dependencies:
    ```bash
    python -m venv venv
    source venv/bin/activate  # On Windows: venv\Scripts\activate
    pip install -r requirements.txt
    ```
-3. Set up configuration:
+4. Set up configuration:
    - Copy `config.yaml.example` to `config.yaml` and modify as needed.
    - Copy `.env.example` to `.env` and fill in your API keys (Twitter, Discord, Robinhood).
 
@@ -64,8 +69,18 @@ Before installing Hermes, secure your VPS:
    ```bash
    su - hermes
    ```
-2. Clone the repository into `/opt/hermes` (or the user's home directory).
-3. Set up the Python virtual environment as described in the Local Setup.
+2. Create an SSH key on your VPS and add it to your GitHub account to allow pulling from your private repository:
+   ```bash
+   ssh-keygen -t ed25519 -C "vps-hermes"
+   cat ~/.ssh/id_ed25519.pub
+   # Copy the output and add it to your GitHub Repo -> Settings -> Deploy Keys
+   ```
+3. Clone your private repository into the `hermes` user's home directory:
+   ```bash
+   git clone git@github.com:<your-username>/hermes-agent.git hermes
+   cd hermes
+   ```
+4. Set up the Python virtual environment as described in the Local Setup.
 4. Secure your `.env` file!
    ```bash
    chmod 600 .env
