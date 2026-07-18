@@ -39,3 +39,6 @@ notifications:
 dashboard:
   bind_address: "127.0.0.1"
   port: 8420
+
+gateway:
+  authorized_telegram_user: "Prakash_1803"  # Only this Telegram user can interact with the agent

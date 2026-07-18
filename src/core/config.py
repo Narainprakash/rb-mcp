@@ -42,6 +42,10 @@ class Config:
         return self.settings.get('dashboard', {})
 
     @property
+    def gateway(self):
+        return self.settings.get('gateway', {})
+
+    @property
     def discord_webhook_url(self):
         return os.getenv("DISCORD_WEBHOOK_URL")
 

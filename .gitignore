@@ -3,6 +3,10 @@
 .env.*
 !.env.example
 
+# User config (contains account-specific settings)
+config.yaml
+!.env.example
+
 # Database
 hermes.db
 *.sqlite3

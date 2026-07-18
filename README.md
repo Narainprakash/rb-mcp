@@ -62,7 +62,14 @@ Before installing Hermes, secure your VPS:
    sudo ufw enable
    ```
 
-### Step 2.2: Install Hermes
+### Step 2.2: Install NousResearch Hermes Agent
+Install the agent framework that will host the trading bot:
+```bash
+curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
+source ~/.bashrc
+```
+
+### Step 2.3: Clone & Set Up the Trading Bot
 1. Switch to the `rb-mcp-user` user:
    ```bash
    su - rb-mcp-user
@@ -84,7 +91,7 @@ Before installing Hermes, secure your VPS:
    chmod 600 .env
    ```
 
-### Step 2.3: Set Up Systemd Services
+### Step 2.4: Set Up Systemd Services
 We use `systemd` to run Hermes in the background and ensure it restarts automatically.
 
 1. Create a systemd service file:
@@ -120,7 +127,7 @@ We use `systemd` to run Hermes in the background and ensure it restarts automati
    journalctl -u rb-mcp -f
    ```
 
-### Step 2.4: The Kill Switch
+### Step 2.5: The Kill Switch
 If you need to instantly halt the system, create the `HALT` file in the root directory:
 ```bash
 touch /home/rb-mcp-user/rb-mcp/HALT
@@ -130,7 +137,7 @@ To resume operations, simply remove the file:
 rm /home/rb-mcp-user/rb-mcp/HALT
 ```
 
-### Step 2.5: Dashboard Systemd Service
+### Step 2.6: Dashboard Systemd Service
 The dashboard is a read-only Flask web server. We run it as a separate service so it doesn't block the trading loop.
 
 1. Create a systemd service for the dashboard:
@@ -162,7 +169,7 @@ The dashboard is a read-only Flask web server. We run it as a separate service s
    sudo systemctl start rb-mcp-dash
    ```
 
-### Step 2.6: Cloudflare Tunnel (External Access)
+### Step 2.7: Cloudflare Tunnel (External Access)
 To securely access the web dashboard without opening ports:
 1. Install `cloudflared` on the VPS.
 2. Authenticate: `cloudflared tunnel login`
@@ -172,19 +179,66 @@ To securely access the web dashboard without opening ports:
 
 ---
 
-## 3. Nous Hermes Agent Integration (Optional)
+## 3. Nous Hermes Agent Integration
 
-This trading bot can act as a fully autonomous "Skill" or "Tool" for the open-source **NousResearch/hermes-agent** framework. This allows you to chat with the Nous Hermes Agent via Telegram or Discord to monitor and manage your trading bot in natural language.
+This trading bot runs on the [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) open-source AI agent framework. The Hermes Agent provides a conversational interface (via Telegram/Discord/CLI) powered by an LLM of your choice (via OpenRouter) to monitor and manage the trading bot in natural language.
 
-### How to Integrate:
-1. Ensure your Nous Hermes Agent is running on the same VPS (or has access to this project's directory).
-2. We have provided custom Python tools inside the `src/hermes_agent_tools/trading_manager.py` file.
-3. Depending on your Nous Hermes Agent setup (e.g., Langchain, LlamaIndex, or raw Python functions), you can import and register these tools in your agent's tool registry.
-4. The provided tools include:
-   - `get_open_positions()`
-   - `get_todays_realized_pnl()`
-   - `get_system_status()`
-   - `trigger_kill_switch()`
-   - `resume_trading()`
+### 3.1 Install Hermes Agent on VPS
+```bash
+# Install the framework
+curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
+source ~/.bashrc
 
-Once registered, you can simply text your Hermes Agent: *"Halt the trading bot!"* or *"What is my PnL today?"* and it will use these tools to execute the command directly on your database.
+# Configure LLM provider (interactive — select OpenRouter, enter API key, pick model)
+hermes model
+
+# Connect Telegram gateway (authorized user: @Prakash_1803)
+hermes gateway setup
+
+# Verify everything is healthy
+hermes doctor
+```
+
+### 3.2 Register Custom Tools
+The custom tools in `src/hermes_agent_tools/trading_manager.py` give the agent read/write access to the trading bot's state.
+
+**Method A — Symlink (recommended):**
+```bash
+ln -s ~/rb-mcp/src/hermes_agent_tools ~/.hermes/custom_tools/hermes-trading
+```
+
+**Method B — Config entry:**
+Add to `~/.hermes/config.yaml`:
+```yaml
+skills:
+  external_dirs:
+    - ~/rb-mcp/src/hermes_agent_tools
+```
+
+### 3.3 Available Tools
+
+| Tool | Description | Example Prompt |
+|---|---|---|
+| `get_open_positions()` | Returns open option positions | *"What positions are we holding?"* |
+| `get_todays_realized_pnl()` | Today's realized P/L | *"How much did we make today?"* |
+| `get_system_status()` | Bot status + API quota | *"Is the bot running?"* |
+| `trigger_kill_switch()` | Creates `HALT` file | *"Stop all trading immediately."* |
+| `resume_trading()` | Removes `HALT` file | *"Resume the trading bot."* |
+
+### 3.4 LLM Configuration (OpenRouter)
+
+Store your API key in `~/.hermes/.env` (**not** in the project's `.env`):
+```
+OPENROUTER_API_KEY=sk-or-your-actual-key-here
+```
+
+Configure the provider in `~/.hermes/config.yaml`:
+```yaml
+model:
+  provider: openrouter
+  default: "nousresearch/hermes-3-llama-3.1-405b"
+```
+
+Switch models on the fly inside the chat: `/model anthropic/claude-sonnet-4-20250514`
+
+Browse models at [openrouter.ai/models](https://openrouter.ai/models).

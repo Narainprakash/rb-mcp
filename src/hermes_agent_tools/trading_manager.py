@@ -1,12 +1,18 @@
 """
-Nous Hermes Agent Custom Tools
+Nous Hermes Agent Custom Tools — Trading Manager
 
-This module provides the necessary functions to allow the Nous Hermes Agent 
-to act as the "Manager" for the high-frequency trading bot.
+This module provides custom tools for the NousResearch/hermes-agent framework
+to act as the conversational "Manager" for the trading bot.
 
-To use these in the Hermes Agent framework, you can register these functions 
-as tools (e.g., using @tool decorators depending on the underlying framework like 
-LangChain or LlamaIndex used by Hermes Agent).
+Registration: Symlink this directory into the agent's custom tools directory:
+    ln -s ~/rb-mcp/src/hermes_agent_tools ~/.hermes/custom_tools/hermes-trading
+
+Or add to ~/.hermes/config.yaml:
+    skills:
+      external_dirs:
+        - ~/rb-mcp/src/hermes_agent_tools
+
+Each function has a descriptive docstring so the LLM knows when to call it.
 """
 import os
 import sqlite3
