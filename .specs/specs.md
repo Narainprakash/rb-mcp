@@ -76,7 +76,7 @@ Hermes is a self-hosted agent running on the [NousResearch/hermes-agent](https:/
   +--------------------+
 
   Kill Switch Paths (independent, redundant):
-  1. SSH:      touch ~/hermes-trading/HALT
+  1. SSH:      touch ~/rb-mcp/HALT
   2. Agent:    "Halt the trading bot" via Telegram/Discord/CLI
   3. Robinhood: Account-level disconnect in app
 ```
@@ -290,7 +290,7 @@ model:
 
 skills:
   external_dirs:
-    - ~/hermes-trading/src/hermes_agent_tools  # Point to the trading tools
+    - ~/rb-mcp/src/hermes_agent_tools  # Point to the trading tools
 ```
 
 **`~/.hermes/.env`** — Agent-level secrets:
@@ -369,7 +369,7 @@ Treat this section as non-negotiable regardless of how the rest gets built.
 
 ### 9.1 Kill Switches (multiple, redundant, independent of each other)
 
-1. **Global halt file** — the simplest and most robust: every tool checks for the existence of a file (e.g. `~/hermes-trading/HALT`) at the top of every loop iteration and before every trade submission. Creating that file with `touch` from any SSH session instantly stops everything, even if the agent or Discord is broken. This should be your primary, always-available switch.
+1. **Global halt file** — the simplest and most robust: every tool checks for the existence of a file (e.g. `~/rb-mcp/HALT`) at the top of every loop iteration and before every trade submission. Creating that file with `touch` from any SSH session instantly stops everything, even if the agent or Discord is broken. This should be your primary, always-available switch.
 2. **Hermes Agent conversational kill switch** — You message the agent via Telegram, Discord, or CLI: *"Stop all trading immediately."* The agent calls the `trigger_kill_switch()` custom tool which creates the `HALT` file. This is the most user-friendly path and works from anywhere with a phone signal. It depends on the agent process being healthy, so treat it as secondary to #1.
 3. **Robinhood-side disconnect** — Robinhood's own agentic trading product includes an account-level disconnect/pause control as a third, independent layer outside Hermes entirely — worth knowing that even if your VPS is fully compromised, you can cut Hermes off from your Robinhood funds directly in the Robinhood app.
 4. **Granular halts** — separate flags for "stop new trades" vs "stop polling" vs "stop everything," since e.g. you might want to keep watching for alerts and logging without letting anything execute.
@@ -422,7 +422,7 @@ Custom tools are placed in `src/hermes_agent_tools/` and registered with the Her
 **Method A — Custom Tools directory (recommended for Python logic):**
 Symlink or copy the tools into the Hermes Agent's custom tools directory:
 ```bash
-ln -s ~/hermes-trading/src/hermes_agent_tools ~/.hermes/custom_tools/hermes-trading
+ln -s ~/rb-mcp/src/hermes_agent_tools ~/.hermes/custom_tools/hermes-trading
 ```
 Files with a `registry.register()` call are auto-discovered at agent startup.
 
@@ -431,7 +431,7 @@ Add the tools directory to `~/.hermes/config.yaml`:
 ```yaml
 skills:
   external_dirs:
-    - ~/hermes-trading/src/hermes_agent_tools
+    - ~/rb-mcp/src/hermes_agent_tools
 ```
 
 ### 11.2 Available Tools
@@ -487,8 +487,8 @@ source ~/.bashrc
 hermes model    # Select OpenRouter, enter API key, pick model
 
 # 3. Clone the trading bot repo
-git clone git@github.com:Narainprakash/rb-mcp.git ~/hermes-trading
-cd ~/hermes-trading
+git clone git@github.com:Narainprakash/rb-mcp.git ~/rb-mcp
+cd ~/rb-mcp
 pip install -r requirements.txt
 
 # 4. Set up trading secrets
@@ -497,7 +497,7 @@ nano .env              # Fill in Twitter, Discord, Robinhood tokens
 chmod 600 .env
 
 # 5. Register custom tools with the agent
-ln -s ~/hermes-trading/src/hermes_agent_tools ~/.hermes/custom_tools/hermes-trading
+ln -s ~/rb-mcp/src/hermes_agent_tools ~/.hermes/custom_tools/hermes-trading
 
 # 6. Connect messaging gateway
 hermes gateway setup   # Connect Telegram and/or Discord

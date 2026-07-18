@@ -53,8 +53,8 @@ Before installing Hermes, secure your VPS:
 1. **Disable Password Authentication**: Log in via SSH using your key.
 2. **Create a Service User**: Never run Hermes as `root`.
    ```bash
-   sudo adduser hermes
-   sudo usermod -aG sudo hermes
+   sudo adduser rb-mcp-user
+   sudo usermod -aG sudo rb-mcp-user
    ```
 3. **Configure Firewall (UFW)**: Only allow SSH. The web dashboard will use Cloudflare Tunnel.
    ```bash
@@ -63,20 +63,20 @@ Before installing Hermes, secure your VPS:
    ```
 
 ### Step 2.2: Install Hermes
-1. Switch to the `hermes` user:
+1. Switch to the `rb-mcp-user` user:
    ```bash
-   su - hermes
+   su - rb-mcp-user
    ```
 2. Create an SSH key on your VPS and add it to your GitHub account to allow pulling from your private repository:
    ```bash
-   ssh-keygen -t ed25519 -C "vps-hermes"
+   ssh-keygen -t ed25519 -C "vps-rb-mcp"
    cat ~/.ssh/id_ed25519.pub
    # Copy the output and add it to your GitHub Repo -> Settings -> Deploy Keys
    ```
-3. Clone your repository into the `hermes` user's home directory:
+3. Clone your repository into the `rb-mcp-user` user's home directory:
    ```bash
-   git clone git@github.com:Narainprakash/rb-mcp.git hermes
-   cd hermes
+   git clone git@github.com:Narainprakash/rb-mcp.git rb-mcp
+   cd rb-mcp
    ```
 4. Set up the Python virtual environment as described in the Local Setup.
 4. Secure your `.env` file!
@@ -89,7 +89,7 @@ We use `systemd` to run Hermes in the background and ensure it restarts automati
 
 1. Create a systemd service file:
    ```bash
-   sudo nano /etc/systemd/system/hermes.service
+   sudo nano /etc/systemd/system/rb-mcp.service
    ```
 2. Add the following configuration (adjust paths if necessary):
    ```ini
@@ -99,12 +99,12 @@ We use `systemd` to run Hermes in the background and ensure it restarts automati
 
    [Service]
    Type=simple
-   User=hermes
-   WorkingDirectory=/home/hermes/hermes
-   ExecStart=/home/hermes/hermes/venv/bin/python main.py
+   User=rb-mcp-user
+   WorkingDirectory=/home/rb-mcp-user/rb-mcp
+   ExecStart=/home/rb-mcp-user/rb-mcp/venv/bin/python main.py
    Restart=always
    RestartSec=5
-   EnvironmentFile=/home/hermes/hermes/.env
+   EnvironmentFile=/home/rb-mcp-user/rb-mcp/.env
 
    [Install]
    WantedBy=multi-user.target
@@ -112,22 +112,22 @@ We use `systemd` to run Hermes in the background and ensure it restarts automati
 3. Enable and start the service:
    ```bash
    sudo systemctl daemon-reload
-   sudo systemctl enable hermes
-   sudo systemctl start hermes
+   sudo systemctl enable rb-mcp
+   sudo systemctl start rb-mcp
    ```
 4. View logs:
    ```bash
-   journalctl -u hermes -f
+   journalctl -u rb-mcp -f
    ```
 
 ### Step 2.4: The Kill Switch
 If you need to instantly halt the system, create the `HALT` file in the root directory:
 ```bash
-touch /home/hermes/hermes/HALT
+touch /home/rb-mcp-user/rb-mcp/HALT
 ```
 To resume operations, simply remove the file:
 ```bash
-rm /home/hermes/hermes/HALT
+rm /home/rb-mcp-user/rb-mcp/HALT
 ```
 
 ### Step 2.5: Dashboard Systemd Service
@@ -135,7 +135,7 @@ The dashboard is a read-only Flask web server. We run it as a separate service s
 
 1. Create a systemd service for the dashboard:
    ```bash
-   sudo nano /etc/systemd/system/hermes-dash.service
+   sudo nano /etc/systemd/system/rb-mcp-dash.service
    ```
 2. Add the following configuration:
    ```ini
@@ -145,12 +145,12 @@ The dashboard is a read-only Flask web server. We run it as a separate service s
 
    [Service]
    Type=simple
-   User=hermes
-   WorkingDirectory=/home/hermes/hermes
-   ExecStart=/home/hermes/hermes/venv/bin/python src/dashboard/app.py
+   User=rb-mcp-user
+   WorkingDirectory=/home/rb-mcp-user/rb-mcp
+   ExecStart=/home/rb-mcp-user/rb-mcp/venv/bin/python src/dashboard/app.py
    Restart=always
    RestartSec=5
-   EnvironmentFile=/home/hermes/hermes/.env
+   EnvironmentFile=/home/rb-mcp-user/rb-mcp/.env
 
    [Install]
    WantedBy=multi-user.target
@@ -158,8 +158,8 @@ The dashboard is a read-only Flask web server. We run it as a separate service s
 3. Enable and start:
    ```bash
    sudo systemctl daemon-reload
-   sudo systemctl enable hermes-dash
-   sudo systemctl start hermes-dash
+   sudo systemctl enable rb-mcp-dash
+   sudo systemctl start rb-mcp-dash
    ```
 
 ### Step 2.6: Cloudflare Tunnel (External Access)
