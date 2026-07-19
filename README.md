@@ -271,6 +271,8 @@ Add the official Robinhood MCP endpoint to your Hermes Agent config (`~/.hermes/
 mcp_servers:
   robinhood:
     url: "https://agent.robinhood.com/mcp/trading"
+    auth: "oauth"
+    enabled: true
 ```
 
 After adding this, restart the Hermes Agent's gateway process so it loads the new MCP server:
@@ -279,11 +281,11 @@ hermes gateway restart
 ```
 This will trigger the browser-based authentication flow. Complete it when prompted to cache a session token locally.
 
-> **💡 HEADLESS VPS TIP**: If you are SSH'd into a remote server, the authentication will fail with a `401 Unauthorized` because it cannot open a browser. To fix this:
-> 1. Install Hermes Agent on your **local desktop computer**.
-> 2. Add the Robinhood MCP config to your local `~/.hermes/config.yaml`.
-> 3. Run `hermes mcp test robinhood` locally to complete the browser login.
-> 4. Securely copy the generated authentication cache file (usually `~/.hermes/mcp_auth.json` or `.credentials`) from your local computer to the `~/.hermes/` directory on your VPS.
+> **💡 HEADLESS VPS TIP**: If you are SSH'd into a remote server, Hermes Agent will detect the remote session and print a secure `https://robinhood.com/oauth?...` link in your terminal.
+> 1. Copy that URL and open it in your desktop browser.
+> 2. Authorize the connection to your Agentic account.
+> 3. Your browser will try to redirect to localhost and fail (e.g., "Site can't be reached"). This is expected!
+> 4. Copy the entire URL from your browser's address bar (it contains the `?code=...` parameter) and paste it back into your VPS terminal prompt. Hermes will instantly grab the token and save it.
 
 ### 4.3 Verify the Connection
 Run the MCP list command to confirm the Robinhood MCP is connected:
