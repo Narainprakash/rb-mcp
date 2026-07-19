@@ -273,16 +273,20 @@ mcp_servers:
     url: "https://agent.robinhood.com/mcp/trading"
 ```
 
-After adding this, restart the Hermes Agent and complete the browser-based authentication flow when prompted. This caches a session token locally.
+After adding this, restart the Hermes Agent's gateway process so it loads the new MCP server:
+```bash
+hermes gateway restart
+```
+This will trigger the browser-based authentication flow. Complete it when prompted to cache a session token locally.
 
 ### 4.3 Verify the Connection
-Run the Hermes Agent health check to confirm the Robinhood MCP is connected:
+Run the MCP list command to confirm the Robinhood MCP is connected:
 
 ```bash
-hermes doctor
+hermes mcp list
 ```
 
-You should see the `robinhood` MCP server listed as connected. You can also test from the Hermes chat:
+You should see the `robinhood` MCP server listed and its status. You can also test the connection explicitly using `hermes mcp test robinhood`, or test it from the Hermes chat:
 
 > *"What's my Robinhood account balance?"*
 
