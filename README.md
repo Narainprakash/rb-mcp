@@ -394,3 +394,29 @@ The project's own read-only web dashboard (`rb-mcp-dash` systemd service) runs o
 - API call counter (X API quota tracking)
 
 Access it securely via the Tailscale IP configured in Step 2.7 (e.g., `http://<vps-tailscale-ip>:8420`).
+
+---
+
+## 6. Updating and Restarting Services
+
+When you make changes to your code locally and push them to GitHub, you will need to pull the updates on your VPS and restart the appropriate services for the changes to take effect.
+
+1. **Pull the latest code:**
+   ```bash
+   cd ~/rb-mcp
+   git pull
+   ```
+
+2. **Restart the required service:**
+   
+   - **For Dashboard changes** (UI, HTML, CSS, or dashboard endpoints):
+     ```bash
+     sudo systemctl restart rb-mcp-dash
+     ```
+   
+   - **For Trading Bot changes** (Core logic, polling, `config.yaml`, or risk management):
+     ```bash
+     sudo systemctl restart rb-mcp
+     ```
+
+> **Tip:** You can always view live logs for either service by running `journalctl -u <service-name> -f`
