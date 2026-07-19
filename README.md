@@ -185,12 +185,16 @@ To securely access the web dashboard without opening ports:
 This trading bot runs on the [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) open-source AI agent framework. The Hermes Agent provides a conversational interface (via Telegram/Discord/CLI) powered by an LLM of your choice (via OpenRouter) to monitor and manage the trading bot in natural language.
 
 ### 3.1 Install Hermes Agent on VPS
+**IMPORTANT**: Ensure you run these commands as the `rb-mcp-user` (not `root`).
+
 ```bash
 # Install the framework
 curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
 source ~/.bashrc
 
 # Configure LLM provider (interactive — select OpenRouter, enter API key, pick model)
+# NOTE: Running this command for the first time will auto-generate the 
+# ~/.hermes/ directory and the ~/.hermes/config.yaml file.
 hermes model
 
 # Connect Telegram gateway (authorized user: @Prakash_1803)
@@ -205,6 +209,7 @@ The custom tools in `src/hermes_agent_tools/trading_manager.py` give the agent r
 
 **Method A — Symlink (recommended):**
 ```bash
+mkdir -p ~/.hermes/custom_tools
 ln -s ~/rb-mcp/src/hermes_agent_tools ~/.hermes/custom_tools/hermes-trading
 ```
 
@@ -243,3 +248,110 @@ model:
 Switch models on the fly inside the chat: `/model anthropic/claude-sonnet-4-20250514`
 
 Browse models at [openrouter.ai/models](https://openrouter.ai/models).
+
+---
+
+## 4. Connecting the Robinhood MCP (Live Trading)
+
+> **⚠️ WARNING**: Do NOT proceed with this section until you have run the bot in Paper Mode for at least 1–2 weeks and validated parsing accuracy against real signals. You are responsible for every trade the agent places.
+
+### 4.1 Create a Robinhood Agentic Account
+Robinhood's agentic trading uses a **separate, sandboxed sub-account** — it will never touch your main investing portfolio.
+
+1. On a **desktop browser**, log in to [robinhood.com](https://robinhood.com).
+2. Navigate to **Account → Agentic Trading** and create a new Agentic account.
+3. Transfer funds into the Agentic account. Start small (e.g., $100–$500) while testing.
+
+> **NOTE**: The initial authentication **must be done on a desktop device**. If you see the onboarding link on your phone, copy it and open it in a desktop browser.
+
+### 4.2 Register the Robinhood MCP Server
+Add the official Robinhood MCP endpoint to your Hermes Agent config (`~/.hermes/config.yaml`):
+
+```yaml
+mcp_servers:
+  robinhood:
+    url: "https://agent.robinhood.com/mcp/trading"
+```
+
+After adding this, restart the Hermes Agent and complete the browser-based authentication flow when prompted. This caches a session token locally.
+
+### 4.3 Verify the Connection
+Run the Hermes Agent health check to confirm the Robinhood MCP is connected:
+
+```bash
+hermes doctor
+```
+
+You should see the `robinhood` MCP server listed as connected. You can also test from the Hermes chat:
+
+> *"What's my Robinhood account balance?"*
+
+### 4.4 Switch from Paper Mode to Live Mode
+Once you've verified the MCP connection is healthy:
+
+1. Edit your project's `config.yaml`:
+   ```yaml
+   execution:
+     paper_mode: false
+   ```
+2. Restart the `rb-mcp` systemd service:
+   ```bash
+   sudo systemctl restart rb-mcp
+   ```
+3. **Start with very low limits** in `config.yaml`:
+   ```yaml
+   decision:
+     max_daily_spend_usd: 100
+     per_trade_max_spend_usd: 50
+   ```
+   Raise these gradually as you gain confidence.
+
+### 4.5 Disconnect / Emergency Off
+You have three independent ways to cut trading access:
+
+| Method | How | When to use |
+|---|---|---|
+| **Kill Switch (fastest)** | `touch ~/rb-mcp/HALT` | Bot is running, you want to stop it instantly |
+| **Hermes Agent** | Message: *"Stop all trading immediately"* | From your phone via Telegram/WhatsApp |
+| **Robinhood App** | Account → Agentic Trading → Disconnect | Nuclear option — revokes all agent access at the broker level |
+
+---
+
+## 5. Monitoring & Dashboard
+
+### 5.1 Hermes Agent Dashboard (Web)
+The Hermes Agent includes a built-in web dashboard. Launch it on your VPS:
+
+```bash
+hermes dashboard
+```
+
+This starts a local web interface (default `http://127.0.0.1:9119`) where you can:
+- View agent status, gateway health, and session counts
+- Manage cron jobs, API keys, and skills
+- Chat with the agent directly from the browser
+
+### 5.2 Accessing from Your Phone
+There is **no official Hermes Agent mobile app**. However, you can access the web dashboard from your phone's browser using one of these methods:
+
+**Option A — Cloudflare Tunnel (already set up in Step 2.7):**
+If you configured a Cloudflare Tunnel for the trading dashboard, you can add a second route for the Hermes dashboard:
+```bash
+cloudflared tunnel route dns hermes-dash hermes-dashboard.yourdomain.com
+```
+Then configure the tunnel to also route `hermes-dashboard.yourdomain.com` → `http://127.0.0.1:9119`.
+
+**Option B — Tailscale (simple VPN):**
+Install [Tailscale](https://tailscale.com) on both your VPS and your phone. Once connected, access the dashboard directly via the VPS's Tailscale IP:
+```
+http://<vps-tailscale-ip>:9119
+```
+
+### 5.3 Trading Bot Dashboard (Project-Specific)
+The project's own read-only web dashboard (`rb-mcp-dash` systemd service) runs on port `8420` and provides:
+- Alert history and parse results
+- Trade log with decision reasoning
+- Open positions and P/L summary
+- API call counter (X API quota tracking)
+
+Access it via the Cloudflare Tunnel configured in Step 2.7.
