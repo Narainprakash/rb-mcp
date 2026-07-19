@@ -46,9 +46,30 @@ def health():
     
     return jsonify({
         "status": "halted" if kill_switch_active else "active",
+        "paper_mode": config.execution.get("paper_mode", True),
         "api_quota_used": count,
         "api_quota_limit": limit,
         "quota_pct": round((count / limit) * 100, 2)
+    })
+
+@app.route('/api/stats')
+def stats():
+    now = datetime.now(NY_TZ)
+    start_of_day = f"{now.year}-{now.month:02d}-{now.day:02d} 00:00:00"
+    
+    data = query_db("""
+        SELECT 
+            SUM(realized_pnl) as total_pnl,
+            SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END) as wins,
+            SUM(CASE WHEN realized_pnl <= 0 THEN 1 ELSE 0 END) as losses
+        FROM limit_orders 
+        WHERE status = 'filled' AND fill_timestamp >= ?
+    """, (start_of_day,), one=True)
+    
+    return jsonify({
+        "daily_pnl": data['total_pnl'] if data and data['total_pnl'] is not None else 0.0,
+        "wins": data['wins'] if data and data['wins'] is not None else 0,
+        "losses": data['losses'] if data and data['losses'] is not None else 0
     })
 
 @app.route('/api/feed')

@@ -1,5 +1,6 @@
 document.addEventListener("DOMContentLoaded", () => {
     fetchHealth();
+    fetchStats();
     fetchPositions();
     fetchHistory();
     fetchFeed();
@@ -7,6 +8,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // Poll every 5 seconds
     setInterval(() => {
         fetchHealth();
+        fetchStats();
         fetchPositions();
         fetchHistory();
         fetchFeed();
@@ -30,6 +32,16 @@ async function fetchHealth() {
             text.textContent = 'HALTED';
         }
         
+        // Mode Badge
+        const modeBadge = document.getElementById('mode-badge');
+        if (data.paper_mode) {
+            modeBadge.textContent = 'PAPER';
+            modeBadge.className = 'badge mode-paper';
+        } else {
+            modeBadge.textContent = 'LIVE';
+            modeBadge.className = 'badge mode-live';
+        }
+        
         // Quota
         document.getElementById('quota-used').textContent = data.api_quota_used;
         document.getElementById('quota-limit').textContent = data.api_quota_limit;
@@ -47,6 +59,24 @@ async function fetchHealth() {
         
     } catch (e) {
         console.error("Failed to fetch health", e);
+    }
+}
+
+async function fetchStats() {
+    try {
+        const res = await fetch('/api/stats');
+        const data = await res.json();
+        
+        const pnlEl = document.getElementById('daily-pnl');
+        const sign = data.daily_pnl >= 0 ? '+' : '';
+        pnlEl.textContent = `${sign}$${data.daily_pnl.toFixed(2)}`;
+        pnlEl.className = data.daily_pnl >= 0 ? 'stat-value text-green' : 'stat-value text-red';
+        
+        document.getElementById('daily-wins').textContent = `${data.wins}W`;
+        document.getElementById('daily-losses').textContent = `${data.losses}L`;
+        
+    } catch (e) {
+        console.error("Failed to fetch stats", e);
     }
 }
 

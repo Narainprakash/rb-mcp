@@ -57,7 +57,7 @@ Before installing Hermes, secure your VPS:
    sudo adduser rb-mcp-user
    sudo usermod -aG sudo rb-mcp-user
    ```
-3. **Configure Firewall (UFW)**: Only allow SSH. The web dashboard will use Cloudflare Tunnel.
+3. **Configure Firewall (UFW)**: Only allow SSH. The web dashboard will be accessed securely via Tailscale.
    ```bash
    sudo ufw allow ssh
    sudo ufw enable
@@ -170,13 +170,24 @@ The dashboard is a read-only Flask web server. We run it as a separate service s
    sudo systemctl start rb-mcp-dash
    ```
 
-### Step 2.7: Cloudflare Tunnel (External Access)
-To securely access the web dashboard without opening ports:
-1. Install `cloudflared` on the VPS.
-2. Authenticate: `cloudflared tunnel login`
-3. Create a tunnel: `cloudflared tunnel create hermes-dash`
-4. Route traffic: Configure the tunnel to route to `http://127.0.0.1:8420`.
-5. Run the tunnel as a systemd service.
+### Step 2.7: Tailscale VPN (External Access)
+To securely access the web dashboard without opening ports or buying a domain, we use Tailscale to create a private network between your devices:
+1. Create a free account at [Tailscale](https://tailscale.com).
+2. Install Tailscale on the VPS:
+   ```bash
+   curl -fsSL https://tailscale.com/install.sh | sh
+   sudo tailscale up
+   ```
+3. Follow the authentication link printed in the terminal to add the VPS to your Tailscale network.
+4. Install the Tailscale app on your local computer/phone and log in.
+5. Update your `config.yaml` to allow incoming Tailscale connections by changing the `bind_address` to `0.0.0.0`:
+   ```yaml
+   dashboard:
+     bind_address: "0.0.0.0"
+     port: 8420
+   ```
+6. Restart the dashboard service: `sudo systemctl restart rb-mcp-dash`
+7. You can now securely access the dashboard by navigating to `http://<vps-tailscale-ip>:8420` in your browser.
 
 ---
 
@@ -332,11 +343,27 @@ You have three independent ways to cut trading access:
 ## 5. Monitoring & Dashboard
 
 ### 5.1 Hermes Agent Dashboard (Web)
-The Hermes Agent includes a built-in web dashboard. Launch it on your VPS:
+The Hermes Agent includes a built-in web dashboard. Because it builds the UI using React, your VPS must have Node.js installed first.
 
-```bash
-hermes dashboard
-```
+1. **Install Node.js (Ubuntu/Debian):**
+   ```bash
+   curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+   sudo apt install -y nodejs
+   ```
+
+2. **Launch the Dashboard:**
+   ```bash
+   hermes dashboard
+   ```
+
+> **🛠️ FIXING "npm install failed"**: If you get a "Web UI npm install failed" error when launching the dashboard, it is because Hermes is installed globally and your user doesn't have permission to build the UI files. To fix it, build it manually with `sudo`:
+> ```bash
+> cd /usr/local/lib/hermes-agent
+> sudo npm install --workspace web
+> sudo npm run build -w web
+> cd ~/rb-mcp
+> hermes dashboard
+> ```
 
 This starts a local web interface (default `http://127.0.0.1:9119`) where you can:
 - View agent status, gateway health, and session counts
@@ -346,18 +373,18 @@ This starts a local web interface (default `http://127.0.0.1:9119`) where you ca
 ### 5.2 Accessing from Your Phone
 There is **no official Hermes Agent mobile app**. However, you can access the web dashboard from your phone's browser using one of these methods:
 
-**Option A — Cloudflare Tunnel (already set up in Step 2.7):**
-If you configured a Cloudflare Tunnel for the trading dashboard, you can add a second route for the Hermes dashboard:
-```bash
-cloudflared tunnel route dns hermes-dash hermes-dashboard.yourdomain.com
-```
-Then configure the tunnel to also route `hermes-dashboard.yourdomain.com` → `http://127.0.0.1:9119`.
-
-**Option B — Tailscale (simple VPN):**
-Install [Tailscale](https://tailscale.com) on both your VPS and your phone. Once connected, access the dashboard directly via the VPS's Tailscale IP:
+**Option A — Tailscale (already set up in Step 2.7):**
+Ensure the Tailscale app is installed and connected on your phone. You can access the dashboard directly via the VPS's Tailscale IP:
 ```
 http://<vps-tailscale-ip>:9119
 ```
+
+**Option C — SSH Port Forwarding (Easiest for Desktop):**
+If you want to access the dashboard on your computer while SSH'd into the VPS, open a *new* terminal window on your local machine and run:
+```bash
+ssh -L 9119:127.0.0.1:9119 rb-mcp-user@<your_vps_ip>
+```
+Leave that window open. You can now open `http://127.0.0.1:9119` in your local browser!
 
 ### 5.3 Trading Bot Dashboard (Project-Specific)
 The project's own read-only web dashboard (`rb-mcp-dash` systemd service) runs on port `8420` and provides:
@@ -366,4 +393,4 @@ The project's own read-only web dashboard (`rb-mcp-dash` systemd service) runs o
 - Open positions and P/L summary
 - API call counter (X API quota tracking)
 
-Access it via the Cloudflare Tunnel configured in Step 2.7.
+Access it securely via the Tailscale IP configured in Step 2.7 (e.g., `http://<vps-tailscale-ip>:8420`).

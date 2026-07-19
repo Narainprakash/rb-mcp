@@ -14,6 +14,7 @@
             <div class="logo">
                 <h2>Hermes</h2>
                 <span class="badge">Agentic</span>
+                <span id="mode-badge" class="badge mode-paper">PAPER</span>
             </div>
             
             <div class="status-card glass-card">
@@ -41,6 +42,20 @@
                 <h1>Live Dashboard</h1>
                 <p>Read-only view of agentic trading activity.</p>
             </header>
+
+            <!-- Daily Stats -->
+            <div class="stats-row">
+                <div class="stat-card glass-card">
+                    <h3>Today's Realized P/L</h3>
+                    <div id="daily-pnl" class="stat-value">$0.00</div>
+                </div>
+                <div class="stat-card glass-card">
+                    <h3>Today's Win / Loss</h3>
+                    <div class="stat-value">
+                        <span id="daily-wins" class="text-green">0W</span> <span style="color:var(--text-secondary)">-</span> <span id="daily-losses" class="text-red">0L</span>
+                    </div>
+                </div>
+            </div>
 
             <div class="grid-container">
                 <!-- Open Positions -->
