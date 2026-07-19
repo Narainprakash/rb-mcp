@@ -279,6 +279,12 @@ hermes gateway restart
 ```
 This will trigger the browser-based authentication flow. Complete it when prompted to cache a session token locally.
 
+> **💡 HEADLESS VPS TIP**: If you are SSH'd into a remote server, the authentication will fail with a `401 Unauthorized` because it cannot open a browser. To fix this:
+> 1. Install Hermes Agent on your **local desktop computer**.
+> 2. Add the Robinhood MCP config to your local `~/.hermes/config.yaml`.
+> 3. Run `hermes mcp test robinhood` locally to complete the browser login.
+> 4. Securely copy the generated authentication cache file (usually `~/.hermes/mcp_auth.json` or `.credentials`) from your local computer to the `~/.hermes/` directory on your VPS.
+
 ### 4.3 Verify the Connection
 Run the MCP list command to confirm the Robinhood MCP is connected:
 
