@@ -55,6 +55,10 @@
                         <span id="daily-wins" class="text-green">0W</span> <span style="color:var(--text-secondary)">-</span> <span id="daily-losses" class="text-red">0L</span>
                     </div>
                 </div>
+                <div class="stat-card glass-card">
+                    <h3>Capital at Risk</h3>
+                    <div id="capital-at-risk" class="stat-value text-blue">$0.00</div>
+                </div>
             </div>
 
             <div class="grid-container">
@@ -99,10 +103,59 @@
                 </section>
             </div>
 
+            <!-- Secondary Grid -->
+            <div class="grid-container">
+                <!-- Pending Limit Buys -->
+                <section class="panel glass-card">
+                    <h2>Pending Limit Buys</h2>
+                    <div class="table-container">
+                        <table id="limit-buys-table">
+                            <thead>
+                                <tr>
+                                    <th>Contract</th>
+                                    <th>Qty</th>
+                                    <th>Target Price</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <!-- JS injected -->
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- Parse Failures -->
+                <section class="panel glass-card">
+                    <h2>Needs Review</h2>
+                    <div class="table-container">
+                        <table id="failures-table">
+                            <thead>
+                                <tr>
+                                    <th>Time</th>
+                                    <th>Raw Text</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <!-- JS injected -->
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+
             <!-- Live Feed -->
             <section class="panel glass-card full-width">
-                <h2>Activity Feed</h2>
+                <div class="feed-header-row">
+                    <h2>Live Feeds</h2>
+                    <div class="feed-tabs">
+                        <button id="tab-signals" class="tab-btn active">Signals</button>
+                        <button id="tab-events" class="tab-btn">System Logs</button>
+                    </div>
+                </div>
                 <div class="feed-container" id="activity-feed">
+                    <!-- JS injected -->
+                </div>
+                <div class="feed-container" id="events-feed" style="display: none;">
                     <!-- JS injected -->
                 </div>
             </section>

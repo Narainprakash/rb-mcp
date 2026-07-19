@@ -4,6 +4,29 @@ document.addEventListener("DOMContentLoaded", () => {
     fetchPositions();
     fetchHistory();
     fetchFeed();
+    fetchLimitBuys();
+    fetchEvents();
+    fetchFailures();
+
+    // Tab Logic
+    const tabSignals = document.getElementById('tab-signals');
+    const tabEvents = document.getElementById('tab-events');
+    const feedSignals = document.getElementById('activity-feed');
+    const feedEvents = document.getElementById('events-feed');
+
+    tabSignals.addEventListener('click', () => {
+        tabSignals.classList.add('active');
+        tabEvents.classList.remove('active');
+        feedSignals.style.display = 'flex';
+        feedEvents.style.display = 'none';
+    });
+
+    tabEvents.addEventListener('click', () => {
+        tabEvents.classList.add('active');
+        tabSignals.classList.remove('active');
+        feedEvents.style.display = 'flex';
+        feedSignals.style.display = 'none';
+    });
 
     // Poll every 5 seconds
     setInterval(() => {
@@ -12,6 +35,9 @@ document.addEventListener("DOMContentLoaded", () => {
         fetchPositions();
         fetchHistory();
         fetchFeed();
+        fetchLimitBuys();
+        fetchEvents();
+        fetchFailures();
     }, 5000);
 });
 
@@ -74,6 +100,9 @@ async function fetchStats() {
         
         document.getElementById('daily-wins').textContent = `${data.wins}W`;
         document.getElementById('daily-losses').textContent = `${data.losses}L`;
+        
+        const carEl = document.getElementById('capital-at-risk');
+        carEl.textContent = `$${data.capital_at_risk.toFixed(2)}`;
         
     } catch (e) {
         console.error("Failed to fetch stats", e);
@@ -184,5 +213,87 @@ async function fetchFeed() {
         });
     } catch (e) {
         console.error("Failed to fetch feed", e);
+    }
+}
+
+async function fetchLimitBuys() {
+    try {
+        const res = await fetch('/api/limit_buys');
+        const data = await res.json();
+        const tbody = document.querySelector('#limit-buys-table tbody');
+        tbody.innerHTML = '';
+        
+        if (data.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; color:var(--text-secondary)">No pending dips</td></tr>';
+            return;
+        }
+        
+        data.forEach(order => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td><strong>$${order.ticker}</strong> ${order.expiry} ${order.strike}${order.option_type}</td>
+                <td>${order.quantity}</td>
+                <td class="text-blue">$${order.target_price.toFixed(2)}</td>
+            `;
+            tbody.appendChild(tr);
+        });
+    } catch (e) {
+        console.error("Failed to fetch limit buys", e);
+    }
+}
+
+async function fetchFailures() {
+    try {
+        const res = await fetch('/api/parse_failures');
+        const data = await res.json();
+        const tbody = document.querySelector('#failures-table tbody');
+        tbody.innerHTML = '';
+        
+        if (data.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="2" style="text-align:center; color:var(--text-secondary)">All clear</td></tr>';
+            return;
+        }
+        
+        data.forEach(alert => {
+            const tr = document.createElement('tr');
+            const timeStr = alert.timestamp.split(' ')[1].substring(0, 5);
+            tr.innerHTML = `
+                <td>${timeStr}</td>
+                <td style="color:var(--accent-orange); font-size:0.8rem;">${alert.raw_text.substring(0, 50)}...</td>
+            `;
+            tbody.appendChild(tr);
+        });
+    } catch (e) {
+        console.error("Failed to fetch parse failures", e);
+    }
+}
+
+async function fetchEvents() {
+    try {
+        const res = await fetch('/api/events');
+        const data = await res.json();
+        const container = document.getElementById('events-feed');
+        container.innerHTML = '';
+        
+        if (data.length === 0) {
+            container.innerHTML = '<div class="feed-item">No system events...</div>';
+            return;
+        }
+        
+        data.forEach(event => {
+            const div = document.createElement('div');
+            div.className = 'feed-item';
+            
+            const timeStr = event.timestamp.split(' ')[1].substring(0, 5);
+            
+            div.innerHTML = `
+                <div class="feed-time">${timeStr} ET</div>
+                <div class="feed-header">${event.event_type}</div>
+                <div class="feed-body">${event.message}</div>
+            `;
+            container.appendChild(div);
+        });
+    } catch (e) {
+        console.error("Failed to fetch events", e);
     }
 }

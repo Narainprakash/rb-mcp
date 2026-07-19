@@ -66,10 +66,18 @@ def stats():
         WHERE status = 'filled' AND fill_timestamp >= ?
     """, (start_of_day,), one=True)
     
+    car_data = query_db("""
+        SELECT SUM(average_cost * total_quantity * 100) as car 
+        FROM positions 
+        WHERE status = 'open'
+    """, one=True)
+    car = car_data['car'] if car_data and car_data['car'] is not None else 0.0
+    
     return jsonify({
         "daily_pnl": data['total_pnl'] if data and data['total_pnl'] is not None else 0.0,
         "wins": data['wins'] if data and data['wins'] is not None else 0,
-        "losses": data['losses'] if data and data['losses'] is not None else 0
+        "losses": data['losses'] if data and data['losses'] is not None else 0,
+        "capital_at_risk": car
     })
 
 @app.route('/api/feed')
@@ -105,6 +113,33 @@ def history():
         JOIN positions p ON l.position_id = p.id
         WHERE l.status = 'filled'
         ORDER BY l.fill_timestamp DESC LIMIT 50
+    """)
+    return jsonify(data)
+
+@app.route('/api/limit_buys')
+def limit_buys():
+    data = query_db("""
+        SELECT l.*, a.ticker, a.expiry, a.strike, a.option_type 
+        FROM limit_buy_orders l
+        JOIN alerts a ON l.alert_id = a.id
+        WHERE l.status = 'pending'
+    """)
+    return jsonify(data)
+
+@app.route('/api/events')
+def events():
+    data = query_db("""
+        SELECT * FROM system_events 
+        ORDER BY id DESC LIMIT 50
+    """)
+    return jsonify(data)
+
+@app.route('/api/parse_failures')
+def parse_failures():
+    data = query_db("""
+        SELECT * FROM alerts 
+        WHERE parse_status = 'needs_review' 
+        ORDER BY id DESC LIMIT 20
     """)
     return jsonify(data)
 
