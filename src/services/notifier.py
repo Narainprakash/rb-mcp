@@ -24,7 +24,8 @@ def send_discord_message(event_type: str, message: str):
 
 def send_whatsapp_message(event_type: str, message: str):
     """
-    Sends a message via the local Hermes WhatsApp bridge using the 'hermes send' CLI.
+    Sends a message via the local Hermes WhatsApp bridge using the 'hermes send' CLI
+    to all configured whatsapp_trade_targets.
     """
     import subprocess
     
@@ -32,11 +33,25 @@ def send_whatsapp_message(event_type: str, message: str):
     if event_type not in enabled_events:
         return # Event type not enabled for notification
         
-    try:
-        # We use the default 'whatsapp' target which maps to the Home Channel in Hermes
-        subprocess.run(["hermes", "send", "--to", "whatsapp", message], check=True, capture_output=True)
-    except Exception as e:
-        print(f"Failed to send WhatsApp notification: {e}")
+    targets = config.notifications.get('whatsapp_trade_targets', ["whatsapp"])
+    for target in targets:
+        try:
+            subprocess.run(["hermes", "send", "--to", target, message], check=True, capture_output=True)
+        except Exception as e:
+            print(f"Failed to send WhatsApp notification to {target}: {e}")
+
+def forward_raw_tweet(raw_text: str):
+    """
+    Forwards the exact raw tweet text to all configured whatsapp_forward_targets.
+    """
+    import subprocess
+    
+    targets = config.notifications.get('whatsapp_forward_targets', ["whatsapp"])
+    for target in targets:
+        try:
+            subprocess.run(["hermes", "send", "--to", target, raw_text], check=True, capture_output=True)
+        except Exception as e:
+            print(f"Failed to forward raw tweet to {target}: {e}")
 
 # Convenience functions for specific event types
 def notify_alert(action, ticker, expiry, strike, option_type, price, style):

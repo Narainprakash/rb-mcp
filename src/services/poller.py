@@ -9,7 +9,7 @@ from src.core.config import config
 from src.core.security import check_kill_switch
 from src.core.db import get_connection
 from src.services.parser import parse_alert
-from src.services.notifier import notify_alert, notify_add, notify_review_needed, notify_error
+from src.services.notifier import notify_alert, notify_add, notify_review_needed, notify_error, forward_raw_tweet
 
 SINCE_ID_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".since_id")
 NY_TZ = pytz.timezone(config.polling.get("timezone", "America/New_York"))
@@ -166,8 +166,10 @@ def start_poller():
                         notify_review_needed(tweet.text)
                     elif signal.action == "BTO":
                         notify_alert(signal.action, signal.ticker, signal.expiry, signal.strike, signal.option_type, signal.price, signal.trade_style)
+                        forward_raw_tweet(tweet.text)
                     elif signal.action == "ADD":
                         notify_add(signal.ticker, signal.expiry, signal.strike, signal.option_type, signal.price)
+                        forward_raw_tweet(tweet.text)
                     
                     highest_id = str(tweet.id)
                 

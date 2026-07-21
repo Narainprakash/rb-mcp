@@ -459,3 +459,23 @@ The bot relies on a hidden file (`.since_id`) in the root directory to track its
 **The Danger:** If that file is missing (like on the very first time you boot up the bot), it defaults to pulling the 5 most recent tweets. If the account hasn't tweeted in a few days, those 5 tweets will be very old, but the bot could process them as if they are brand new and execute late trades!
 
 **The Safeguard:** To prevent this scenario, the poller is hardcoded to explicitly check the `tweet.created_at` timestamp. It compares the tweet's calendar date to the current calendar date (in New York Time). If a tweet is from a previous day, the bot will silently ignore it and advance its `.since_id` tracker. This ensures the bot will never trade an old tweet on its initial startup.
+
+## 8. WhatsApp Routing & Forwarding
+
+The bot uses the Hermes Agent gateway (`hermes send`) to push notifications. You can configure exactly who receives trade execution receipts, and who receives the raw `#ALERT` tweet forwards.
+
+In your `config.yaml`, under `notifications:`, you can set:
+
+```yaml
+notifications:
+  # Targets for trade execution receipts
+  whatsapp_trade_targets:
+    - "whatsapp"                  # Default home channel (your personal number)
+    
+  # Targets for forwarding the raw #ALERT tweet
+  whatsapp_forward_targets:
+    - "whatsapp:+1234567890"      # Example: A specific person's number
+    # - "whatsapp:123456789@g.us" # Example: A specific WhatsApp group
+```
+
+By separating these, you can forward the raw tweet to a large group, but keep your private trading execution receipts restricted to your personal phone number.

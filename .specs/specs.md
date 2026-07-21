@@ -534,3 +534,9 @@ Both paths coexist. The webhook is the primary notification channel; the agent g
 - [ ] Confirm your Twitter API Basic tier is active (the 480 calls/day fits the 10K/month limit cleanly)
 - [ ] Set up Cloudflare Tunnel (or alternative) for dashboard external access
 - [ ] Review X API ToS and the signal provider's own terms around automated use
+
+## 13. WhatsApp Routing & Forwarding Configuration
+The bot natively integrates with the Hermes Agent's WhatsApp bridge using the `hermes send` CLI tool.
+In `config.yaml`, the `notifications` block supports splitting targets:
+- `whatsapp_trade_targets`: A list of targets (e.g., `"whatsapp"` or `"whatsapp:+1234567890"`) that will receive trade execution receipts and bot errors.
+- `whatsapp_forward_targets`: A list of targets (e.g., `"whatsapp:123456789@g.us"`) that will receive the raw, exact text of the `#ALERT` tweet the moment it is parsed and traded.

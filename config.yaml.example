@@ -37,6 +37,10 @@ notifications:
     - limit_sell_filled
     - kill_switch
     - error
+  whatsapp_trade_targets:
+    - "whatsapp"
+  whatsapp_forward_targets:
+    - "whatsapp"
 
 dashboard:
   bind_address: "127.0.0.1"
