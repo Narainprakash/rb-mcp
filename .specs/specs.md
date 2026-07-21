@@ -111,6 +111,7 @@ All four windows and both cadences must be defined in a config file (Section 8),
 ### 2.2 Fetch Logic
 
 - Use the X API's user-timeline endpoint scoped to the single account, `since_id` cursor-based, so each poll only pulls new tweets rather than re-fetching the last N.
+- **IMPORTANT SAFEGUARD**: The bot relies on a hidden file (`.since_id`) to track its place. If that file is missing (like on the very first time the bot boots up), it defaults to pulling the 5 most recent tweets. If the account hasn't tweeted in a few days, those 5 tweets will be very old, but the bot could process them as if they are brand new and execute late trades! To prevent this, the poller explicitly checks `tweet.created_at` against the current calendar day and silently ignores any tweet from a previous day.
 - Persist the last-seen tweet ID to disk/DB so a service restart doesn't reprocess or skip tweets.
 - Track and log every API call (timestamp, endpoint) to the DB, per your requirement to see "twitter API calls" in the dashboard.
 - **Quota guardrail:** Track the monthly pull count. If it approaches the 10,000 limit, alert you via Discord and optionally degrade the polling cadence to avoid hitting the hard cap before month-end.
