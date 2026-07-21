@@ -18,9 +18,13 @@ def is_market_open_today():
     if not config.polling.get("skip_market_holidays", True):
         return True
     
-    nyse = xcals.get_calendar("NYSE")
-    today_str = datetime.now(NY_TZ).strftime("%Y-%m-%d")
-    return nyse.is_session(today_str)
+    try:
+        nyse = xcals.get_calendar("NYSE")
+        today_str = datetime.now(NY_TZ).strftime("%Y-%m-%d")
+        return nyse.is_session(today_str)
+    except Exception as e:
+        print(f"WARNING: Calendar check failed ({e}). Defaulting to open market.")
+        return True
 
 def get_current_polling_interval():
     """
