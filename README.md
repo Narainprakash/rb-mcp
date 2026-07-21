@@ -208,12 +208,42 @@ source ~/.bashrc
 # ~/.hermes/ directory and the ~/.hermes/config.yaml file.
 hermes model
 
-# Connect Telegram gateway (authorized user: @Prakash_1803)
-hermes gateway setup
-
 # Verify everything is healthy
 hermes doctor
 ```
+
+### 3.1.1 Setting up the Telegram Gateway
+You must create your own private bot to communicate with the Hermes Agent:
+1. Open Telegram and search for **@BotFather** (with the official blue checkmark).
+2. Send the message `/newbot` and follow the prompts to name your bot.
+3. BotFather will provide an **API Token**.
+4. In your VPS terminal, run `hermes gateway setup`. Select **Telegram**, and paste the API Token when prompted. 
+   *(Note: If the setup wizard fails to save, you can manually add the following block to the bottom of `~/.hermes/config.yaml`):*
+   ```yaml
+   gateways:
+     telegram:
+       enabled: true
+       bot_token: "YOUR_BOT_TOKEN_FROM_BOTFATHER_HERE"
+       authorized_users:
+         - "<YOUR_TELEGRAM_USERNAME>"
+   ```
+5. Start the background process by running `hermes gateway start` (or `hermes gateway restart` if it's already running).
+6. Search for your new bot in Telegram and send it a message to interact with your trading agent!
+
+> **Troubleshooting Note:** If the bot doesn't reply, run `hermes doctor`. If it warns that `python-telegram-bot` is not installed, you can easily inject the required dependency into the Hermes Agent's isolated environment by running: `pipx inject hermes-agent python-telegram-bot`. Then simply restart the gateway!
+
+### 3.1.2 Setting up the WhatsApp Gateway (via Web Bridge)
+This version of Hermes natively supports a **WhatsApp Web Bridge** that runs locally on your VPS, meaning no external APIs or webhooks are needed.
+
+1. In your VPS terminal, run the WhatsApp setup wizard:
+   ```bash
+   hermes whatsapp
+   ```
+2. The wizard will ask if you want to use a separate bot number or your personal number. Choose **Option 2** (Personal number) unless you have a burner phone number ready.
+3. A large QR code will print out in your terminal window. 
+4. Open the WhatsApp app on your phone, navigate to **Settings > Linked Devices > Link a Device**, and scan the QR code on your screen.
+5. Once authenticated, start the background gateway by running `hermes gateway restart`.
+6. To talk to your trading agent, simply send a WhatsApp message to yourself (your own phone number)!
 
 ### 3.2 Register Custom Tools
 The custom tools in `src/hermes_agent_tools/trading_manager.py` give the agent read/write access to the trading bot's state.
