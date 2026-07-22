@@ -93,6 +93,13 @@ CREATE TABLE IF NOT EXISTS system_events (
     message TEXT,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Performance Indexes
+CREATE INDEX IF NOT EXISTS idx_alerts_parse_status ON alerts(parse_status);
+CREATE INDEX IF NOT EXISTS idx_limit_orders_status ON limit_orders(status);
+CREATE INDEX IF NOT EXISTS idx_limit_buy_orders_status ON limit_buy_orders(status);
+CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status);
+CREATE INDEX IF NOT EXISTS idx_positions_lookup ON positions(ticker, expiry, strike, option_type, status);
 """
 
 def get_connection():

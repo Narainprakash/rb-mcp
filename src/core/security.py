@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 from src.core.db import get_connection, log_system_event
 
 def check_kill_switch():
@@ -23,9 +24,11 @@ def check_kill_switch():
         except Exception as e:
             print(f"Failed to log kill switch event: {e}")
 
-        # In a real async/loop environment, you might raise a custom exception 
-        # that the main loop catches to cleanly shut down, or just exit.
-        sys.exit(1)
+        # To prevent a systemd crash loop (where systemctl continuously restarts 
+        # the bot only for it to crash again), we drop into an infinite sleep.
+        # This keeps the process alive but halts all trading.
+        while True:
+            time.sleep(60)
 
 def engage_kill_switch():
     """

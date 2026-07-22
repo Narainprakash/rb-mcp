@@ -57,12 +57,12 @@ def forward_raw_tweet(raw_text: str):
 # Convenience functions for specific event types
 def notify_alert(action, ticker, expiry, strike, option_type, price, style):
     style_str = f" ({style})" if style else ""
-    msg = f"ALERT — {action} ${ticker} {expiry} {strike}{option_type} @ {price}{style_str}"
+    msg = f"ALERT — {action} ${ticker} {expiry} {strike}{option_type} @ {price:.2f}{style_str}"
     send_discord_message("alert", msg)
     send_whatsapp_message("alert", msg)
 
 def notify_add(ticker, expiry, strike, option_type, price):
-    msg = f"ADD — ${ticker} {expiry} {strike}{option_type} AVG {price}"
+    msg = f"ADD — ${ticker} {expiry} {strike}{option_type} AVG {price:.2f}"
     send_discord_message("add", msg)
     send_whatsapp_message("add", msg)
 
@@ -72,32 +72,32 @@ def notify_review_needed(reason):
     send_whatsapp_message("review", msg)
 
 def notify_executed_live(quantity, ticker, strike, option_type, price):
-    msg = f"EXECUTED — {quantity}x ${ticker} {strike}{option_type} @ {price} (paper: false)"
+    msg = f"EXECUTED — {quantity}x ${ticker} {strike}{option_type} @ {price:.2f} (paper: false)"
     send_discord_message("executed", msg)
     send_whatsapp_message("executed", msg)
 
 def notify_executed_paper(quantity, ticker, strike, option_type, price):
-    msg = f"PAPER TRADE — {quantity}x ${ticker} {strike}{option_type} @ {price}"
+    msg = f"PAPER TRADE — {quantity}x ${ticker} {strike}{option_type} @ {price:.2f}"
     send_discord_message("paper", msg)
     send_whatsapp_message("paper", msg)
 
 def notify_limit_sell_placed(quantity, ticker, strike, option_type, price, pct):
-    msg = f"LIMIT SELL PLACED — {quantity}x ${ticker} {strike}{option_type} @ {price} ({pct}% target)"
+    msg = f"LIMIT SELL PLACED — {quantity}x ${ticker} {strike}{option_type} @ {price:.2f} ({pct}% target)"
     send_discord_message("limit_sell_placed", msg)
     send_whatsapp_message("limit_sell_placed", msg)
 
 def notify_limit_buy_placed(quantity, ticker, strike, option_type, price, pct):
-    msg = f"LIMIT BUY PLACED — {quantity}x ${ticker} {strike}{option_type} @ {price} ({pct}% discount)"
+    msg = f"LIMIT BUY PLACED — {quantity}x ${ticker} {strike}{option_type} @ {price:.2f} ({pct}% discount)"
     send_discord_message("limit_buy_placed", msg)
     send_whatsapp_message("limit_buy_placed", msg)
 
 def notify_limit_sell_filled(quantity, ticker, strike, option_type, price, pnl_dollars, pnl_pct):
-    msg = f"SOLD — {quantity}x ${ticker} {strike}{option_type} @ {price} — P/L: ${pnl_dollars} (+{pnl_pct}%)"
+    msg = f"SOLD — {quantity}x ${ticker} {strike}{option_type} @ {price:.2f} — P/L: ${pnl_dollars:.2f} (+{pnl_pct:.2f}%)"
     send_discord_message("limit_sell_filled", msg)
     send_whatsapp_message("limit_sell_filled", msg)
 
 def notify_skipped(ask, recommended, tolerance):
-    msg = f"SKIPPED — ask {ask} exceeds {recommended} +{tolerance}% tolerance"
+    msg = f"SKIPPED — ask {ask:.2f} exceeds {recommended:.2f} +{tolerance}% tolerance"
     send_discord_message("skipped", msg)
     send_whatsapp_message("skipped", msg)
 
