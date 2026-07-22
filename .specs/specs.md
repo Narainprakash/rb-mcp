@@ -246,6 +246,8 @@ Send to your `@benkiproject` Discord (either a channel named `benkiproject` or t
 | Kill switch engaged | `KILL SWITCH ACTIVE — all trading halted` |
 | System error | `ERROR — [component] — [message]` |
 
+**Formatting**: All monetary values (prices, targets, P/L) must be formatted to two decimal places (e.g., `$1.50` instead of `$1.5`) to ensure professional readability.
+
 Config: webhook URL, per-event-type on/off toggles, and a rate limit (so a burst of adds doesn't spam the channel).
 
 ---
@@ -261,6 +263,8 @@ Config: webhook URL, per-event-type on/off toggles, and a rate limit (so a burst
 - `limit_orders` — sell order id, link to position, target price, status (pending/filled/cancelled), fill timestamp, realized P/L
 - `api_calls` — service (X / Robinhood), endpoint, timestamp
 - `system_events` — kill switch toggles, config changes, errors, service restarts
+
+**Performance Indexes**: To prevent full table scans during the 2-second polling loops, the schema includes indexes on `alerts(parse_status)`, `limit_orders(status)`, `limit_buy_orders(status)`, and a composite index on `positions(ticker, expiry, strike, option_type, status)`.
 
 ### 7.2 Dashboard Views
 
@@ -377,7 +381,7 @@ Treat this section as non-negotiable regardless of how the rest gets built.
 
 ### 9.1 Kill Switches (multiple, redundant, independent of each other)
 
-1. **Global halt file** — the simplest and most robust: every tool checks for the existence of a file (e.g. `~/rb-mcp/HALT`) at the top of every loop iteration and before every trade submission. Creating that file with `touch` from any SSH session instantly stops everything, even if the agent or Discord is broken. This should be your primary, always-available switch.
+1. **Global halt file** — the simplest and most robust: every loop checks for the existence of a file (e.g. `HALT`) in the project root. If found, the bot drops into an infinite sleep loop. This instantly stops all trading while keeping the process alive (preventing systemd restart loops), even if the agent or Discord is broken. This should be your primary, always-available switch.
 2. **Hermes Agent conversational kill switch** — You message the agent via Telegram, Discord, or CLI: *"Stop all trading immediately."* The agent calls the `trigger_kill_switch()` custom tool which creates the `HALT` file. This is the most user-friendly path and works from anywhere with a phone signal. It depends on the agent process being healthy, so treat it as secondary to #1.
 3. **Robinhood-side disconnect** — Robinhood's own agentic trading product includes an account-level disconnect/pause control as a third, independent layer outside Hermes entirely — worth knowing that even if your VPS is fully compromised, you can cut Hermes off from your Robinhood funds directly in the Robinhood app.
 4. **Granular halts** — separate flags for "stop new trades" vs "stop polling" vs "stop everything," since e.g. you might want to keep watching for alerts and logging without letting anything execute.
