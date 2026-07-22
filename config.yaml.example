@@ -38,18 +38,23 @@ execution:
 # Hermes Config: Notification & Alerting
 # ==========================================
 notifications:
-  events_enabled:                        # List of event types you want the bot to notify you about via Discord/WhatsApp
-    - alert
-    - add
-    - review
-    - executed
-    - paper
-    - skipped
-    - limit_buy_placed
-    - limit_sell_placed
-    - limit_sell_filled
-    - kill_switch
-    - error
+  # ---------------------------------------------------------
+  # Event Switches
+  # To 'engage' (enable) an alert, keep it in the list below. 
+  # To disable an alert, comment it out by adding a '#' in front of the dash (e.g. #- paper) or delete the line.
+  # ---------------------------------------------------------
+  events_enabled:
+    - alert                # Sent when a standard BTO (Buy To Open) signal is detected
+    - add                  # Sent when an ADD signal (adding to existing position) is detected
+    - review               # Sent if the regex parser fails and a tweet needs manual review
+    - executed             # Sent when a live trade successfully fills on Robinhood
+    - paper                # Sent when a simulated trade executes in paper_mode
+    - skipped              # Sent if the market ask is too high (exceeds price_tolerance_pct)
+    - limit_buy_placed     # Sent when the bot places a discount limit buy to catch a dip
+    - limit_sell_placed    # Sent when the bot places your take-profit limit sell order
+    - limit_sell_filled    # Sent when your take-profit order hits and P/L is secured
+    - kill_switch          # CRITICAL: Sent if the HALT file is created (manually or via circuit breaker)
+    - error                # CRITICAL: Sent on system/execution errors
   whatsapp_trade_targets:                # Contacts to receive trade receipts and errors
     - "whatsapp"
   whatsapp_forward_targets:              # Contacts to receive the forwarded raw text of the #ALERT tweet
