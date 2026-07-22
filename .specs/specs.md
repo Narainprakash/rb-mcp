@@ -544,5 +544,17 @@ In `config.yaml`, the `notifications` block supports splitting targets:
 
 ## 14. Daily Summary Scheduler
 A background thread (`summary_loop`) runs continuously to monitor the time. 
-- At a configurable time (default 16:30 ET), it aggregates the day's total realized P/L, trades executed, and X API calls made.
+- At a configurable time (default 16:30 ET), it aggregates the day's metrics: total realized P/L, trades executed, alerts parsed, currently open positions, and X API calls made.
 - It formats a summary report and pushes it to targets defined in `config.yaml` under `summary.targets` using the `hermes send` CLI tool.
+
+## 15. Circuit Breaker
+The executor tracks consecutive trade execution errors via a module-level counter. If `error_circuit_breaker_count` (default 3) consecutive failures occur (e.g., Robinhood API is down), the bot automatically:
+1. Logs a `kill_switch` event to `system_events`.
+2. Calls `engage_kill_switch()` to create the `HALT` file.
+3. Sends you an immediate notification via Discord and WhatsApp.
+The counter resets to 0 on every successful trade execution.
+
+## 16. Stale Limit Buy Order Cleanup
+Pending limit buy orders that have not filled are automatically cancelled under two conditions:
+- **0DTE orders**: Cancelled at the `zero_dte_market_sell_cutoff` time (default 15:50 ET), same as limit sells.
+- **Non-0DTE orders**: Cancelled after 24 hours if still pending, to prevent orphaned orders from accumulating and generating unnecessary API quote requests.

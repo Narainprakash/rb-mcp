@@ -16,13 +16,14 @@ def trade_loop():
     """
     print("Starting Hermes Trade & Execution Loop...")
     from src.core.db import log_system_event
+    from src.services.notifier import notify_error
     log_system_event('startup', 'Hermes Trade & Execution Loop started')
     while True:
         try:
             # 1. Check Kill Switch
             check_kill_switch()
             
-            # 2. Check if we should be polling
+            # 2. Check if we should be active
             interval = get_current_polling_interval()
             if interval is None:
                 # Outside market/polling hours, sleep long to save API calls
@@ -32,17 +33,19 @@ def trade_loop():
             # 3. Process Open Orders (Take-Profit & 0DTE cutoffs)
             process_open_orders()
             
+            # 4. Find alerts that haven't been decisioned yet
             conn = get_connection()
-            cursor = conn.cursor()
-            
-            # 2. Find alerts that haven't been decisioned yet
-            cursor.execute("""
-                SELECT a.* FROM alerts a
-                LEFT JOIN decisions d ON a.id = d.alert_id
-                WHERE a.parse_status = 'success' AND d.id IS NULL
-                ORDER BY a.timestamp ASC
-            """)
-            pending_alerts = cursor.fetchall()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT a.* FROM alerts a
+                    LEFT JOIN decisions d ON a.id = d.alert_id
+                    WHERE a.parse_status = 'success' AND d.id IS NULL
+                    ORDER BY a.timestamp ASC
+                """)
+                pending_alerts = cursor.fetchall()
+            finally:
+                conn.close()
             
             for alert in pending_alerts:
                 print(f"Processing decision for alert ID {alert['id']} (${alert['ticker']} {alert['action']})")
@@ -51,7 +54,7 @@ def trade_loop():
                 quote = get_live_quote(alert['ticker'], alert['expiry'], alert['strike'], alert['option_type'])
                 live_ask = quote['ask']
                 
-                # Compute decision based on price tolerance and risk limits
+                # 5. Compute decision based on price tolerance and risk limits
                 action, reasoning = compute_decision(
                     alert['id'], 
                     alert['ticker'], 
@@ -65,7 +68,7 @@ def trade_loop():
                 # Log decision
                 decision_id = log_decision(alert['id'], alert['price'], live_ask, action, reasoning)
                 
-                # Execute if within tolerance and limits
+                # 6. Execute if within tolerance and limits
                 if action in ("market_buy", "limit_buy"):
                     execute_trade(
                         decision_id=decision_id,
@@ -79,13 +82,14 @@ def trade_loop():
                         recommended_price=alert['price']
                     )
             
-            # 3. Monitor and process open orders (limit sells and limit buys)
-            process_open_orders()
-            
-            conn.close()
-            
+        except SystemExit:
+            raise  # Allow kill switch sys.exit(1) to propagate
         except Exception as e:
             print(f"Error in trade loop: {e}")
+            try:
+                notify_error("TradeLoop", str(e))
+            except Exception:
+                pass  # Don't let notification failures crash the loop
             
         # Run trade loop frequently to catch limit sell fills quickly
         time.sleep(2)

@@ -27,22 +27,26 @@ def set_last_since_id(since_id):
 
 def log_api_call(service, endpoint):
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO api_calls (service, endpoint) VALUES (?, ?)", (service, endpoint))
-    conn.commit()
-    conn.close()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO api_calls (service, endpoint) VALUES (?, ?)", (service, endpoint))
+        conn.commit()
+    finally:
+        conn.close()
 
 def check_quota_guardrail():
     conn = get_connection()
-    cursor = conn.cursor()
-    # Check API calls in the current month
-    now = datetime.now(NY_TZ)
-    start_of_month = f"{now.year}-{now.month:02d}-01 00:00:00"
-    
-    cursor.execute("SELECT COUNT(*) as count FROM api_calls WHERE service = 'x' AND timestamp >= ?", (start_of_month,))
-    row = cursor.fetchone()
-    count = row['count']
-    conn.close()
+    try:
+        cursor = conn.cursor()
+        # Check API calls in the current month
+        now = datetime.now(NY_TZ)
+        start_of_month = f"{now.year}-{now.month:02d}-01 00:00:00"
+        
+        cursor.execute("SELECT COUNT(*) as count FROM api_calls WHERE service = 'x' AND timestamp >= ?", (start_of_month,))
+        row = cursor.fetchone()
+        count = row['count']
+    finally:
+        conn.close()
     
     limit = config.polling.get("monthly_api_call_ceiling", 10000)
     if count >= limit * 0.95:
@@ -123,24 +127,25 @@ def start_poller():
                     
                     # Deduplication check
                     conn = get_connection()
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT id FROM alerts WHERE tweet_id = ?", (str(tweet.id),))
-                    if cursor.fetchone():
+                    try:
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT id FROM alerts WHERE tweet_id = ?", (str(tweet.id),))
+                        if cursor.fetchone():
+                            continue # Already processed
+                        
+                        # Parse Alert
+                        signal = parse_alert(tweet.text)
+                        
+                        # Save Alert to DB
+                        cursor.execute("""
+                            INSERT INTO alerts (tweet_id, raw_text, action, ticker, expiry, strike, option_type, price, trade_style, parse_status)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (str(tweet.id), tweet.text, signal.action, signal.ticker, signal.expiry, signal.strike, 
+                              signal.option_type, signal.price, signal.trade_style, signal.parse_status))
+                        alert_id = cursor.lastrowid
+                        conn.commit()
+                    finally:
                         conn.close()
-                        continue # Already processed
-                    
-                    # Parse Alert
-                    signal = parse_alert(tweet.text)
-                    
-                    # Save Alert to DB
-                    cursor.execute("""
-                        INSERT INTO alerts (tweet_id, raw_text, action, ticker, expiry, strike, option_type, price, trade_style, parse_status)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (str(tweet.id), tweet.text, signal.action, signal.ticker, signal.expiry, signal.strike, 
-                          signal.option_type, signal.price, signal.trade_style, signal.parse_status))
-                    alert_id = cursor.lastrowid
-                    conn.commit()
-                    conn.close()
                     
                     # Notify
                     if signal.parse_status == "needs_review":

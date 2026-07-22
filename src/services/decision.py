@@ -13,15 +13,17 @@ def check_daily_spend_limit(requested_spend: float) -> bool:
     
     # Get total spend today
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT sum(fill_price * quantity * 100) as total_spend 
-        FROM trades 
-        WHERE timestamp >= ? AND timestamp < ?
-    """, (start_utc, end_utc))
-    row = cursor.fetchone()
-    total_spend = row['total_spend'] if row['total_spend'] else 0.0
-    conn.close()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT sum(fill_price * quantity * 100) as total_spend 
+            FROM trades 
+            WHERE timestamp >= ? AND timestamp < ?
+        """, (start_utc, end_utc))
+        row = cursor.fetchone()
+        total_spend = row['total_spend'] if row['total_spend'] else 0.0
+    finally:
+        conn.close()
     
     return (total_spend + requested_spend) <= limit
 
@@ -29,11 +31,13 @@ def check_open_positions_limit() -> bool:
     """Checks if we have reached the maximum open positions limit"""
     limit = config.decision.get('max_open_positions', 10)
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT count(*) as count FROM positions WHERE status = 'open'")
-    row = cursor.fetchone()
-    count = row['count']
-    conn.close()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT count(*) as count FROM positions WHERE status = 'open'")
+        row = cursor.fetchone()
+        count = row['count']
+    finally:
+        conn.close()
     return count < limit
 
 def check_position_spend_limit(ticker: str, expiry: str, strike: float, option_type: str, requested_spend: float) -> bool:
@@ -41,14 +45,16 @@ def check_position_spend_limit(ticker: str, expiry: str, strike: float, option_t
     limit = config.decision.get('max_spend_per_position_usd', 1000)
     
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT average_cost, total_quantity 
-        FROM positions 
-        WHERE ticker = ? AND expiry = ? AND strike = ? AND option_type = ? AND status = 'open'
-    """, (ticker, expiry, strike, option_type))
-    row = cursor.fetchone()
-    conn.close()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT average_cost, total_quantity 
+            FROM positions 
+            WHERE ticker = ? AND expiry = ? AND strike = ? AND option_type = ? AND status = 'open'
+        """, (ticker, expiry, strike, option_type))
+        row = cursor.fetchone()
+    finally:
+        conn.close()
     
     if row:
         current_position_value = row['average_cost'] * row['total_quantity'] * 100
@@ -99,12 +105,14 @@ def compute_decision(alert_id: int, ticker: str, expiry: str, strike: float, opt
 
 def log_decision(alert_id, recommended_price, observed_price, action_taken, reasoning):
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO decisions (alert_id, recommended_price, observed_price, action_taken, reasoning)
-        VALUES (?, ?, ?, ?, ?)
-    """, (alert_id, recommended_price, observed_price, action_taken, reasoning))
-    decision_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO decisions (alert_id, recommended_price, observed_price, action_taken, reasoning)
+            VALUES (?, ?, ?, ?, ?)
+        """, (alert_id, recommended_price, observed_price, action_taken, reasoning))
+        decision_id = cursor.lastrowid
+        conn.commit()
+    finally:
+        conn.close()
     return decision_id

@@ -1,39 +1,47 @@
 import time
 import subprocess
 from datetime import datetime
-import pytz
 
 from src.core.config import config
 from src.core.db import get_connection, log_system_event
 from src.core.time_utils import NY_TZ, get_today_utc_bounds
 
-NY_TZ = pytz.timezone(config.polling.get("timezone", "America/New_York"))
-
 def get_daily_metrics(date_str):
-    """Fetches PnL, Trades, and API calls for the given NY date string."""
+    """Fetches PnL, Trades, Alerts, Open Positions, and API calls for the given NY date string."""
     conn = get_connection()
-    cursor = conn.cursor()
-    
-    start_utc, end_utc = get_today_utc_bounds()
-    
-    # API Calls
-    cursor.execute("SELECT COUNT(*) as api_calls FROM api_calls WHERE timestamp >= ? AND timestamp < ?", (start_utc, end_utc))
-    api_calls = cursor.fetchone()['api_calls']
-    
-    # Trades executed (Buy)
-    cursor.execute("SELECT COUNT(*) as trades_placed FROM trades WHERE timestamp >= ? AND timestamp < ?", (start_utc, end_utc))
-    trades_placed = cursor.fetchone()['trades_placed']
-    
-    # Realized PnL from filled Limit Sells
-    cursor.execute("SELECT SUM(realized_pnl) as total_pnl FROM limit_orders WHERE status = 'filled' AND fill_timestamp >= ? AND fill_timestamp < ?", (start_utc, end_utc))
-    total_pnl = cursor.fetchone()['total_pnl'] or 0.0
-    
-    conn.close()
+    try:
+        cursor = conn.cursor()
+        
+        start_utc, end_utc = get_today_utc_bounds()
+        
+        # API Calls
+        cursor.execute("SELECT COUNT(*) as api_calls FROM api_calls WHERE timestamp >= ? AND timestamp < ?", (start_utc, end_utc))
+        api_calls = cursor.fetchone()['api_calls']
+        
+        # Trades executed (Buy)
+        cursor.execute("SELECT COUNT(*) as trades_placed FROM trades WHERE timestamp >= ? AND timestamp < ?", (start_utc, end_utc))
+        trades_placed = cursor.fetchone()['trades_placed']
+        
+        # Realized PnL from filled Limit Sells
+        cursor.execute("SELECT SUM(realized_pnl) as total_pnl FROM limit_orders WHERE status = 'filled' AND fill_timestamp >= ? AND fill_timestamp < ?", (start_utc, end_utc))
+        total_pnl = cursor.fetchone()['total_pnl'] or 0.0
+        
+        # Alerts parsed today
+        cursor.execute("SELECT COUNT(*) as alerts_parsed FROM alerts WHERE timestamp >= ? AND timestamp < ?", (start_utc, end_utc))
+        alerts_parsed = cursor.fetchone()['alerts_parsed']
+        
+        # Current open positions
+        cursor.execute("SELECT COUNT(*) as open_positions FROM positions WHERE status = 'open'")
+        open_positions = cursor.fetchone()['open_positions']
+    finally:
+        conn.close()
     
     return {
         "api_calls": api_calls,
         "trades_placed": trades_placed,
-        "total_pnl": total_pnl
+        "total_pnl": total_pnl,
+        "alerts_parsed": alerts_parsed,
+        "open_positions": open_positions
     }
 
 def send_summary_notification(summary_text):
@@ -74,6 +82,8 @@ def summary_loop():
                     f"📊 *Hermes Daily Summary ({current_date_str})*\n\n"
                     f"• Realized P/L: {sign}${metrics['total_pnl']:.2f}\n"
                     f"• Trades Executed: {metrics['trades_placed']}\n"
+                    f"• Alerts Parsed: {metrics['alerts_parsed']}\n"
+                    f"• Open Positions: {metrics['open_positions']}\n"
                     f"• X API Calls Used: {metrics['api_calls']}"
                 )
                 

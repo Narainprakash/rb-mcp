@@ -111,10 +111,12 @@ def init_db():
 
 def log_system_event(event_type: str, message: str):
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO system_events (event_type, message) VALUES (?, ?)", (event_type, message))
-    conn.commit()
-    conn.close()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO system_events (event_type, message) VALUES (?, ?)", (event_type, message))
+        conn.commit()
+    finally:
+        conn.close()
 
 if __name__ == "__main__":
     init_db()

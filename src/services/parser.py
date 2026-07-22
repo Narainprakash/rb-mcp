@@ -1,5 +1,6 @@
 import re
 from datetime import datetime, date
+from src.core.time_utils import get_ny_time
 
 class ParsedSignal:
     def __init__(self, raw_text, action=None, ticker=None, expiry=None, strike=None, 
@@ -28,7 +29,7 @@ class ParsedSignal:
         }
 
 def infer_year(month, day, is_0dte):
-    today = date.today()
+    today = get_ny_time().date()
     if is_0dte:
         return f"{today.year}-{today.month:02d}-{today.day:02d}"
     
