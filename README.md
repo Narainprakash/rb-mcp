@@ -355,8 +355,14 @@ Once you've verified the MCP connection is healthy:
 3. **Start with very low limits** in `config.yaml`:
    ```yaml
    decision:
-     max_daily_spend_usd: 100
-     per_trade_max_spend_usd: 50
+     price_tolerance_pct: 10
+     take_profit_pct: 20
+     limit_buy_discount_pct: 20
+     contracts_per_signal: 1
+     max_open_positions: 10
+     per_trade_max_spend_usd: 500
+     max_spend_per_position_usd: 1000
+     max_daily_spend_usd: 5000
    ```
    Raise these gradually as you gain confidence.
 

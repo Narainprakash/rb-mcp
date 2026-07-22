@@ -207,8 +207,9 @@ Configurable parameters (Section 8), not hardcoded:
 - `take_profit_pct` (default 20%) — target profit for the limit sell order.
 - `contracts_per_signal` (default 1) — Defaults to 1 for both BTO and ADD based on your specifications, but kept configurable.
 - `max_open_positions` — cap on simultaneous option positions
-- `max_daily_spend` — hard dollar ceiling across all trades in a day
-- `per_trade_max_spend` — sanity ceiling per single order
+- `max_daily_spend_usd` — hard dollar ceiling across all trades in a day
+- `per_trade_max_spend_usd` — sanity ceiling per single order
+- `max_spend_per_position_usd` — hard dollar ceiling across all contracts within a single position (prevents over-exposure on multiple ADDs)
 
 The Decision Engine must fetch a live quote (bid/ask) from Robinhood before comparing to `recommended_price` — do not trust a stale or cached price for this comparison, since the whole rule is price-sensitive.
 

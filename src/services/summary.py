@@ -5,24 +5,27 @@ import pytz
 
 from src.core.config import config
 from src.core.db import get_connection, log_system_event
+from src.core.time_utils import NY_TZ, get_today_utc_bounds
 
 NY_TZ = pytz.timezone(config.polling.get("timezone", "America/New_York"))
 
 def get_daily_metrics(date_str):
-    """Fetches PnL, Trades, and API calls for the given date (YYYY-MM-DD)"""
+    """Fetches PnL, Trades, and API calls for the given NY date string."""
     conn = get_connection()
     cursor = conn.cursor()
     
+    start_utc, end_utc = get_today_utc_bounds()
+    
     # API Calls
-    cursor.execute("SELECT COUNT(*) as api_calls FROM api_calls WHERE date(timestamp) = ?", (date_str,))
+    cursor.execute("SELECT COUNT(*) as api_calls FROM api_calls WHERE timestamp >= ? AND timestamp < ?", (start_utc, end_utc))
     api_calls = cursor.fetchone()['api_calls']
     
     # Trades executed (Buy)
-    cursor.execute("SELECT COUNT(*) as trades_placed FROM trades WHERE date(timestamp) = ?", (date_str,))
+    cursor.execute("SELECT COUNT(*) as trades_placed FROM trades WHERE timestamp >= ? AND timestamp < ?", (start_utc, end_utc))
     trades_placed = cursor.fetchone()['trades_placed']
     
     # Realized PnL from filled Limit Sells
-    cursor.execute("SELECT SUM(realized_pnl) as total_pnl FROM limit_orders WHERE status = 'filled' AND date(fill_timestamp) = ?", (date_str,))
+    cursor.execute("SELECT SUM(realized_pnl) as total_pnl FROM limit_orders WHERE status = 'filled' AND fill_timestamp >= ? AND fill_timestamp < ?", (start_utc, end_utc))
     total_pnl = cursor.fetchone()['total_pnl'] or 0.0
     
     conn.close()

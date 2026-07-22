@@ -3,17 +3,22 @@ from src.core.config import config
 from src.core.db import get_connection
 from src.services.notifier import notify_skipped
 
+from src.core.time_utils import get_today_utc_bounds
+
 def check_daily_spend_limit(requested_spend: float) -> bool:
     """Checks if requested spend exceeds max_daily_spend_usd limit"""
     limit = config.decision.get('max_daily_spend_usd', 500)
+    
+    start_utc, end_utc = get_today_utc_bounds()
+    
     # Get total spend today
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
         SELECT sum(fill_price * quantity * 100) as total_spend 
         FROM trades 
-        WHERE date(timestamp) = date('now', 'localtime')
-    """)
+        WHERE timestamp >= ? AND timestamp < ?
+    """, (start_utc, end_utc))
     row = cursor.fetchone()
     total_spend = row['total_spend'] if row['total_spend'] else 0.0
     conn.close()
@@ -31,7 +36,28 @@ def check_open_positions_limit() -> bool:
     conn.close()
     return count < limit
 
-def compute_decision(alert_id: int, recommended_price: float, live_ask: float):
+def check_position_spend_limit(ticker: str, expiry: str, strike: float, option_type: str, requested_spend: float) -> bool:
+    """Checks if adding to this position exceeds the max_spend_per_position_usd limit"""
+    limit = config.decision.get('max_spend_per_position_usd', 1000)
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT average_cost, total_quantity 
+        FROM positions 
+        WHERE ticker = ? AND expiry = ? AND strike = ? AND option_type = ? AND status = 'open'
+    """, (ticker, expiry, strike, option_type))
+    row = cursor.fetchone()
+    conn.close()
+    
+    if row:
+        current_position_value = row['average_cost'] * row['total_quantity'] * 100
+    else:
+        current_position_value = 0.0
+        
+    return (current_position_value + requested_spend) <= limit
+
+def compute_decision(alert_id: int, ticker: str, expiry: str, strike: float, option_type: str, recommended_price: float, live_ask: float):
     """
     Evaluates price tolerance against the live ask price.
     Returns (action_taken, reasoning)
@@ -50,6 +76,10 @@ def compute_decision(alert_id: int, recommended_price: float, live_ask: float):
         
     if not check_daily_spend_limit(estimated_spend):
         reason = f"estimated spend ${estimated_spend} would exceed daily max"
+        return "skip", reason
+        
+    if not check_position_spend_limit(ticker, expiry, strike, option_type, estimated_spend):
+        reason = f"estimated spend ${estimated_spend} would exceed max spend per position"
         return "skip", reason
         
     if not check_open_positions_limit():

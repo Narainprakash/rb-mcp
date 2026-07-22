@@ -8,40 +8,11 @@ import exchange_calendars as xcals
 from src.core.config import config
 from src.core.security import check_kill_switch
 from src.core.db import get_connection
+from src.core.time_utils import NY_TZ, get_ny_time, is_market_open_today, get_current_polling_interval
 from src.services.parser import parse_alert
 from src.services.notifier import notify_alert, notify_add, notify_review_needed, notify_error, forward_raw_tweet
 
 SINCE_ID_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".since_id")
-NY_TZ = pytz.timezone(config.polling.get("timezone", "America/New_York"))
-
-def is_market_open_today():
-    if not config.polling.get("skip_market_holidays", True):
-        return True
-    
-    try:
-        nyse = xcals.get_calendar("NYSE")
-        today_str = datetime.now(NY_TZ).strftime("%Y-%m-%d")
-        return nyse.is_session(today_str)
-    except Exception as e:
-        print(f"WARNING: Calendar check failed ({e}). Defaulting to open market.")
-        return True
-
-def get_current_polling_interval():
-    """
-    Returns the polling interval in seconds based on the current ET time,
-    or None if outside polling windows.
-    """
-    now = datetime.now(NY_TZ).time()
-    
-    windows = config.polling.get("windows", [])
-    for window in windows:
-        start_time = datetime.strptime(window["start"], "%H:%M").time()
-        end_time = datetime.strptime(window["end"], "%H:%M").time()
-        
-        if start_time <= now <= end_time:
-            return window["interval_sec"]
-            
-    return None # Outside all windows
 
 def get_last_since_id():
     if os.path.exists(SINCE_ID_FILE):
@@ -141,6 +112,14 @@ def start_poller():
                 
                 for tweet in tweets:
                     print(f"Processing tweet {tweet.id}: {tweet.text[:50]}...")
+                    
+                    # 1. Safeguard: created_at check
+                    if hasattr(tweet, 'created_at') and tweet.created_at:
+                        tweet_time_ny = tweet.created_at.astimezone(NY_TZ)
+                        if tweet_time_ny.date() != get_ny_time().date():
+                            print(f"Skipping tweet {tweet.id}: Created at {tweet_time_ny} which is not today.")
+                            highest_id = str(tweet.id)
+                            continue
                     
                     # Deduplication check
                     conn = get_connection()

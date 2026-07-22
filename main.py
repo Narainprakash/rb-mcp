@@ -7,6 +7,7 @@ from src.services.executor import execute_trade, get_live_quote
 from src.services.monitor import process_open_orders
 from src.services.summary import summary_loop
 from src.core.security import check_kill_switch
+from src.core.time_utils import get_current_polling_interval
 
 def trade_loop():
     """
@@ -20,6 +21,16 @@ def trade_loop():
         try:
             # 1. Check Kill Switch
             check_kill_switch()
+            
+            # 2. Check if we should be polling
+            interval = get_current_polling_interval()
+            if interval is None:
+                # Outside market/polling hours, sleep long to save API calls
+                time.sleep(60)
+                continue
+                
+            # 3. Process Open Orders (Take-Profit & 0DTE cutoffs)
+            process_open_orders()
             
             conn = get_connection()
             cursor = conn.cursor()
@@ -41,7 +52,15 @@ def trade_loop():
                 live_ask = quote['ask']
                 
                 # Compute decision based on price tolerance and risk limits
-                action, reasoning = compute_decision(alert['id'], alert['price'], live_ask)
+                action, reasoning = compute_decision(
+                    alert['id'], 
+                    alert['ticker'], 
+                    alert['expiry'], 
+                    alert['strike'], 
+                    alert['option_type'],
+                    alert['price'], 
+                    live_ask
+                )
                 
                 # Log decision
                 decision_id = log_decision(alert['id'], alert['price'], live_ask, action, reasoning)
