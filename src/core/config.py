@@ -44,6 +44,10 @@ class Config:
     @property
     def gateway(self):
         return self.settings.get('gateway', {})
+        
+    @property
+    def summary(self):
+        return self.settings.get('summary', {})
 
     @property
     def discord_webhook_url(self):

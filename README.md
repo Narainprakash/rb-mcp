@@ -9,6 +9,7 @@ Hermes is a self-hosted agent that polls an X (Twitter) account for options trad
 - **Automated Take-Profit**: Automatically places configurable limit sell orders (e.g., 20% profit target) upon execution.
 - **0DTE Protection**: Auto-cancels and market-sells open 0DTE limit orders at 15:50 ET to avoid total loss.
 - **Hard Kill Switch**: An instant global kill switch via a simple `HALT` file presence check that immediately stops all trading.
+- **Daily Summary Push**: A configurable daily summary report (PnL, API Calls, Trades) sent automatically via WhatsApp/Telegram at the end of the day.
 
 ---
 
@@ -479,3 +480,15 @@ notifications:
 ```
 
 By separating these, you can forward the raw tweet to a large group, but keep your private trading execution receipts restricted to your personal phone number.
+
+### Daily Summary Settings
+
+You can also configure the daily summary push notifications under the `summary:` block. By default, it sends to the `whatsapp` bridge.
+
+```yaml
+summary:
+  enabled: true
+  time: "16:30"
+  targets:
+    - "whatsapp"
+```

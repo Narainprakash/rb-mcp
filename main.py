@@ -5,6 +5,7 @@ from src.services.poller import start_poller
 from src.services.decision import compute_decision, log_decision
 from src.services.executor import execute_trade, get_live_quote
 from src.services.monitor import process_open_orders
+from src.services.summary import summary_loop
 from src.core.security import check_kill_switch
 
 def trade_loop():
@@ -13,6 +14,8 @@ def trade_loop():
     makes trading decisions, executes them, and monitors open orders.
     """
     print("Starting Hermes Trade & Execution Loop...")
+    from src.core.db import log_system_event
+    log_system_event('startup', 'Hermes Trade & Execution Loop started')
     while True:
         try:
             # 1. Check Kill Switch
@@ -76,6 +79,10 @@ if __name__ == "__main__":
     # Start poller thread
     poller_thread = threading.Thread(target=start_poller, daemon=True)
     poller_thread.start()
+    
+    # Start summary thread
+    summary_thread = threading.Thread(target=summary_loop, daemon=True)
+    summary_thread.start()
     
     # Start trade loop in main thread
     trade_loop()

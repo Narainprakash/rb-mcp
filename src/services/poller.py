@@ -81,6 +81,8 @@ def check_quota_guardrail():
 
 def start_poller():
     print("Starting Hermes Poller...")
+    from src.core.db import log_system_event
+    log_system_event('startup', 'Hermes Poller started')
     
     if not config.twitter_bearer_token:
         print("ERROR: TWITTER_BEARER_TOKEN not found in .env")

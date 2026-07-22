@@ -107,6 +107,13 @@ def init_db():
     conn.commit()
     conn.close()
 
+def log_system_event(event_type: str, message: str):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO system_events (event_type, message) VALUES (?, ?)", (event_type, message))
+    conn.commit()
+    conn.close()
+
 if __name__ == "__main__":
     init_db()
     print(f"Database initialized at {DB_PATH}")

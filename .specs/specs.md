@@ -64,7 +64,7 @@ Hermes is a self-hosted agent running on the [NousResearch/hermes-agent](https:/
 |   +-------------------------------------------------------------------+ |
 |                                                                        |
 |   +-------------------------------------------------------------------+ |
-|   |  Conversational Manager Tools (read DB, kill switch, PnL)         | |
+|   |  Conversational Manager Tools & Daily Summary Scheduler           | |
 |   +-------------------------------------------------------------------+ |
 +=======================================================================+
 
@@ -255,7 +255,7 @@ Config: webhook URL, per-event-type on/off toggles, and a rate limit (so a burst
 
 - `alerts` — raw tweet, parsed fields, parse status (success/needs_review), timestamp
 - `decisions` — link to alert, recommended price, observed price, action taken, reasoning
-- `trades` — link to decision, paper/live flag, buy order id, fill price, quantity, status (open/closed/expired)
+- `trades` — link to decision, paper_mode boolean, buy order id, fill price, quantity, status (open/closed/expired)
 - `positions` — groups related trades (BTO + ADDs) for the same contract; tracks total quantity, avg cost, current P/L status
 - `limit_orders` — sell order id, link to position, target price, status (pending/filled/cancelled), fill timestamp, realized P/L
 - `api_calls` — service (X / Robinhood), endpoint, timestamp
@@ -540,3 +540,8 @@ The bot natively integrates with the Hermes Agent's WhatsApp bridge using the `h
 In `config.yaml`, the `notifications` block supports splitting targets:
 - `whatsapp_trade_targets`: A list of targets (e.g., `"whatsapp"` or `"whatsapp:+1234567890"`) that will receive trade execution receipts and bot errors.
 - `whatsapp_forward_targets`: A list of targets (e.g., `"whatsapp:123456789@g.us"`) that will receive the raw, exact text of the `#ALERT` tweet the moment it is parsed and traded.
+
+## 14. Daily Summary Scheduler
+A background thread (`summary_loop`) runs continuously to monitor the time. 
+- At a configurable time (default 16:30 ET), it aggregates the day's total realized P/L, trades executed, and X API calls made.
+- It formats a summary report and pushes it to targets defined in `config.yaml` under `summary.targets` using the `hermes send` CLI tool.

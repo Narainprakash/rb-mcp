@@ -1,5 +1,6 @@
 import requests
 from src.core.config import config
+from src.core.db import log_system_event
 
 def send_discord_message(event_type: str, message: str):
     """
@@ -104,8 +105,10 @@ def notify_kill_switch():
     msg = "KILL SWITCH ACTIVE — all trading halted"
     send_discord_message("kill_switch", msg)
     send_whatsapp_message("kill_switch", msg)
+    log_system_event('kill_switch', msg)
 
 def notify_error(component, error_msg):
     msg = f"ERROR — [{component}] — [{error_msg}]"
     send_discord_message("error", msg)
     send_whatsapp_message("error", msg)
+    log_system_event('error', msg)

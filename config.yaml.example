@@ -48,3 +48,9 @@ dashboard:
 
 gateway:
   authorized_telegram_user: "Prakash_1803"  # Only this Telegram user can interact with the agent
+
+summary:
+  enabled: true
+  time: "16:30"
+  targets:
+    - "whatsapp"
