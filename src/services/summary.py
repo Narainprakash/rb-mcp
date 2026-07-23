@@ -7,16 +7,18 @@ from src.core.db import get_connection, log_system_event
 from src.core.time_utils import NY_TZ, get_today_ny_bounds
 
 def get_daily_metrics(date_str):
-    """Fetches PnL, Trades, Alerts, Open Positions, and API calls for the given NY date string."""
+    """Fetches PnL, Trades, Alerts, Open Positions, API calls, and Win Rate for the given NY date string."""
     conn = get_connection()
     try:
         cursor = conn.cursor()
         
         start_utc, end_utc = get_today_ny_bounds()
         
-        # API Calls
-        cursor.execute("SELECT COUNT(*) as api_calls FROM api_calls WHERE timestamp >= ? AND timestamp < ?", (start_utc, end_utc))
-        api_calls = cursor.fetchone()['api_calls']
+        # Monthly API Calls
+        now_ny = datetime.now(NY_TZ)
+        start_of_month = f"{now_ny.year}-{now_ny.month:02d}-01 00:00:00"
+        cursor.execute("SELECT COUNT(*) as monthly_api_calls FROM api_calls WHERE service = 'x' AND timestamp >= ?", (start_of_month,))
+        monthly_api_calls = cursor.fetchone()['monthly_api_calls']
         
         # Trades executed (Buy)
         cursor.execute("SELECT COUNT(*) as trades_placed FROM trades WHERE timestamp >= ? AND timestamp < ?", (start_utc, end_utc))
@@ -25,6 +27,14 @@ def get_daily_metrics(date_str):
         # Realized PnL from filled Limit Sells
         cursor.execute("SELECT SUM(realized_pnl) as total_pnl FROM limit_orders WHERE status = 'filled' AND fill_timestamp >= ? AND fill_timestamp < ?", (start_utc, end_utc))
         total_pnl = cursor.fetchone()['total_pnl'] or 0.0
+        
+        # Win Rate
+        cursor.execute("SELECT COUNT(*) as profitable FROM limit_orders WHERE status = 'filled' AND fill_timestamp >= ? AND fill_timestamp < ? AND realized_pnl > 0", (start_utc, end_utc))
+        profitable = cursor.fetchone()['profitable']
+        
+        cursor.execute("SELECT COUNT(*) as total_closed FROM limit_orders WHERE status = 'filled' AND fill_timestamp >= ? AND fill_timestamp < ?", (start_utc, end_utc))
+        total_closed = cursor.fetchone()['total_closed']
+        win_rate = (profitable / total_closed * 100) if total_closed > 0 else 0.0
         
         # Alerts parsed today
         cursor.execute("SELECT COUNT(*) as alerts_parsed FROM alerts WHERE timestamp >= ? AND timestamp < ?", (start_utc, end_utc))
@@ -37,9 +47,10 @@ def get_daily_metrics(date_str):
         conn.close()
     
     return {
-        "api_calls": api_calls,
+        "monthly_api_calls": monthly_api_calls,
         "trades_placed": trades_placed,
         "total_pnl": total_pnl,
+        "win_rate": win_rate,
         "alerts_parsed": alerts_parsed,
         "open_positions": open_positions
     }
@@ -78,13 +89,19 @@ def summary_loop():
                 
                 # Format message
                 sign = "+" if metrics['total_pnl'] >= 0 else ""
+                paper_mode = config.execution.get("paper_mode", True)
+                mode_str = "PAPER" if paper_mode else "LIVE"
+                api_limit = config.polling.get("monthly_api_call_ceiling", 10000)
+                
                 summary_text = (
-                    f"📊 *Hermes Daily Summary ({current_date_str})*\n\n"
+                    f"📊 *Hermes Daily Summary ({mode_str})*\n"
+                    f"📅 {current_date_str}\n\n"
                     f"• Realized P/L: {sign}${metrics['total_pnl']:.2f}\n"
+                    f"• Win Rate: {metrics['win_rate']:.0f}%\n"
                     f"• Trades Executed: {metrics['trades_placed']}\n"
                     f"• Alerts Parsed: {metrics['alerts_parsed']}\n"
                     f"• Open Positions: {metrics['open_positions']}\n"
-                    f"• X API Calls Used: {metrics['api_calls']}"
+                    f"• X API Quota: {metrics['monthly_api_calls']} / {api_limit}"
                 )
                 
                 send_summary_notification(summary_text)

@@ -275,8 +275,9 @@ Config: webhook URL, per-event-type on/off toggles, and a rate limit (so a burst
 - **Live feed** — chronological stream of alerts → decisions → trades, most recent first
 - **Positions** — open positions, unrealized P/L (needs a periodic price-refresh job)
 - **Trade history** — closed trades, realized P/L, win rate, filterable by ticker/date/paper-vs-live
-- **Cost & Quota tracking** — X API pulls used vs monthly limit. No LLM token tracking needed (parsing is regex-based).
+- **Cost & Quota tracking** — X API pulls used vs monthly limit (e.g. 140 / 10,000). No LLM token tracking needed (parsing is regex-based).
 - **System health** — poller last-run timestamp per window, kill switch status, service uptime
+- **Daily Summary** — automated daily push notification containing: Date, PAPER/LIVE mode flag, Realized P/L, Win Rate (%), Trades Executed, Alerts Parsed, Open Positions, and X API Quota.
 
 ### 7.3 Access & External Exposure
 
