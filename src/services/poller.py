@@ -67,107 +67,121 @@ def start_poller():
     
     # 1. Get Target User ID
     target_account = config.polling.get("target_account", "kttechprivate")
-    try:
-        user = client.get_user(username=target_account)
-        target_user_id = user.data.id
-        log_api_call('x', 'get_user')
-        print(f"Target User {target_account} ID: {target_user_id}")
-    except Exception as e:
-        print(f"Failed to get user ID for {target_account}: {e}")
-        notify_error("Poller", f"Failed to get target account ID: {e}")
-        return
+    target_user_id = None
+    while not target_user_id:
+        try:
+            user = client.get_user(username=target_account)
+            target_user_id = user.data.id
+            log_api_call('x', 'get_user')
+            print(f"Target User {target_account} ID: {target_user_id}")
+        except Exception as e:
+            print(f"Failed to get user ID for {target_account}: {e}. Retrying in 60s...")
+            try: 
+                notify_error("Poller", f"Failed to get target account ID: {e}")
+            except Exception:
+                pass
+            time.sleep(60)
 
     while True:
-        # Check Kill Switch at the start of every loop
-        check_kill_switch()
-        
-        if not is_market_open_today():
-            print("Market is closed today. Sleeping for 1 hour...")
-            time.sleep(3600)
-            continue
-            
-        interval = get_current_polling_interval()
-        if interval is None:
-            # Sleep until the next minute and check again
-            time.sleep(60)
-            continue
-            
-        if not check_quota_guardrail():
-            print("Monthly API quota exceeded. Poller sleeping.")
-            time.sleep(3600)
-            continue
-
-        since_id = get_last_since_id()
-        
         try:
-            # Poll Twitter
-            response = client.get_users_tweets(
-                id=target_user_id,
-                since_id=since_id,
-                max_results=50,
-                tweet_fields=["created_at"]
-            )
-            log_api_call('x', 'get_users_tweets')
+            # Check Kill Switch at the start of every loop
+            check_kill_switch()
             
-            if response.data:
-                # Tweets are returned newest first. Reverse to process oldest first.
-                tweets = reversed(response.data)
-                highest_id = None
+            if not is_market_open_today():
+                print("Market is closed today. Sleeping for 1 hour...")
+                time.sleep(3600)
+                continue
                 
-                for tweet in tweets:
-                    print(f"Processing tweet {tweet.id}: {tweet.text[:50]}...")
-                    
-                    # 1. Safeguard: created_at check
-                    if hasattr(tweet, 'created_at') and tweet.created_at:
-                        tweet_time_ny = tweet.created_at.astimezone(NY_TZ)
-                        if tweet_time_ny.date() != get_ny_time().date():
-                            print(f"Skipping tweet {tweet.id}: Created at {tweet_time_ny} which is not today.")
-                            highest_id = str(tweet.id)
-                            continue
-                    
-                    # Deduplication check
-                    conn = get_connection()
-                    try:
-                        cursor = conn.cursor()
-                        cursor.execute("SELECT id FROM alerts WHERE tweet_id = ?", (str(tweet.id),))
-                        if cursor.fetchone():
-                            continue # Already processed
-                        
-                        # Parse Alert
-                        signal = parse_alert(tweet.text)
-                        
-                        # Save Alert to DB
-                        cursor.execute("""
-                            INSERT INTO alerts (tweet_id, raw_text, action, ticker, expiry, strike, option_type, price, trade_style, parse_status)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (str(tweet.id), tweet.text, signal.action, signal.ticker, signal.expiry, signal.strike, 
-                              signal.option_type, signal.price, signal.trade_style, signal.parse_status))
-                        alert_id = cursor.lastrowid
-                        conn.commit()
-                    finally:
-                        conn.close()
-                    
-                    # Notify
-                    if signal.parse_status == "needs_review":
-                        notify_review_needed(tweet.text)
-                    elif signal.action == "BTO":
-                        notify_alert(signal.action, signal.ticker, signal.expiry, signal.strike, signal.option_type, signal.price, signal.trade_style)
-                        forward_raw_tweet(tweet.text)
-                    elif signal.action == "ADD":
-                        notify_add(signal.ticker, signal.expiry, signal.strike, signal.option_type, signal.price)
-                        forward_raw_tweet(tweet.text)
-                    
-                    highest_id = str(tweet.id)
+            interval = get_current_polling_interval()
+            if interval is None:
+                # Sleep until the next minute and check again
+                time.sleep(60)
+                continue
                 
-                if highest_id:
-                    set_last_since_id(highest_id)
+            if not check_quota_guardrail():
+                print("Monthly API quota exceeded. Poller sleeping.")
+                time.sleep(3600)
+                continue
+
+            since_id = get_last_since_id()
+            
+            try:
+                # Poll Twitter
+                response = client.get_users_tweets(
+                    id=target_user_id,
+                    since_id=since_id,
+                    max_results=50,
+                    tweet_fields=["created_at"]
+                )
+                log_api_call('x', 'get_users_tweets')
+                
+                if response.data:
+                    # Tweets are returned newest first. Reverse to process oldest first.
+                    tweets = reversed(response.data)
+                    highest_id = None
                     
+                    for tweet in tweets:
+                        print(f"Processing tweet {tweet.id}: {tweet.text[:50]}...")
+                        
+                        # 1. Safeguard: created_at check
+                        if hasattr(tweet, 'created_at') and tweet.created_at:
+                            tweet_time_ny = tweet.created_at.astimezone(NY_TZ)
+                            if tweet_time_ny.date() != get_ny_time().date():
+                                print(f"Skipping tweet {tweet.id}: Created at {tweet_time_ny} which is not today.")
+                                highest_id = str(tweet.id)
+                                continue
+                        
+                        # Deduplication check
+                        conn = get_connection()
+                        try:
+                            cursor = conn.cursor()
+                            cursor.execute("SELECT id FROM alerts WHERE tweet_id = ?", (str(tweet.id),))
+                            if cursor.fetchone():
+                                continue # Already processed
+                            
+                            # Parse Alert
+                            signal = parse_alert(tweet.text)
+                            
+                            # Save Alert to DB
+                            cursor.execute("""
+                                INSERT INTO alerts (tweet_id, raw_text, action, ticker, expiry, strike, option_type, price, trade_style, parse_status)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """, (str(tweet.id), tweet.text, signal.action, signal.ticker, signal.expiry, signal.strike, 
+                                  signal.option_type, signal.price, signal.trade_style, signal.parse_status))
+                            alert_id = cursor.lastrowid
+                            conn.commit()
+                        finally:
+                            conn.close()
+                        
+                        # Notify
+                        if signal.parse_status == "needs_review":
+                            notify_review_needed(tweet.text)
+                        elif signal.action == "BTO":
+                            notify_alert(signal.action, signal.ticker, signal.expiry, signal.strike, signal.option_type, signal.price, signal.trade_style)
+                            forward_raw_tweet(tweet.text)
+                        elif signal.action == "ADD":
+                            notify_add(signal.ticker, signal.expiry, signal.strike, signal.option_type, signal.price)
+                            forward_raw_tweet(tweet.text)
+                        
+                        highest_id = str(tweet.id)
+                    
+                    if highest_id:
+                        set_last_since_id(highest_id)
+                        
+            except Exception as e:
+                print(f"Error fetching tweets: {e}")
+                notify_error("Poller", str(e))
+                
+            # Sleep for the configured cadence
+            time.sleep(interval)
+
         except Exception as e:
-            print(f"Error fetching tweets: {e}")
-            notify_error("Poller", str(e))
-            
-        # Sleep for the configured cadence
-        time.sleep(interval)
+            print(f"CRITICAL THREAD ERROR in poller loop: {e}")
+            try: 
+                notify_error("PollerThread", f"Unexpected crash caught: {e}. Retrying in 60s.")
+            except Exception: 
+                pass
+            time.sleep(60)
 
 if __name__ == "__main__":
     start_poller()

@@ -161,7 +161,9 @@ The signal format is highly structured and consistent across all six sample twee
    - Send a Discord notification tagged `REVIEW NEEDED`.
    - **Never** pass an incomplete parse to the Decision Engine.
 
-**Unit tests**: Include a test suite with all six sample tweets above (plus edge cases like missing price, malformed ticker, PUT options) to validate the parser before deployment. This is cheap insurance against regex bugs.
+**Multi-line Tweet Support**: The signal provider frequently formats tweets with `BTO`, `$TICKER`, and `7/24 749C` on separate lines. All regexes use `\s+` which natively matches newlines, so multi-line formatting is handled correctly without special flags.
+
+**Validated Edge Cases**: The parser has been tested against: standard single-line BTO, multi-line BTO (ticker and contract on separate lines), ADD alerts with `AVG:` pricing, PUT options, prices with no leading zero (`.98`), decimal strike prices (`749.5C`), and non-alert tweets (which correctly return `needs_review` with no fields extracted).
 
 ### 3.3 Handling ADD Alerts
 
