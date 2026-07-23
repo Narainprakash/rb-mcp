@@ -145,6 +145,15 @@ To resume operations, simply remove the file:
 rm /home/rb-mcp-user/rb-mcp/HALT
 ```
 
+### Step 2.5.1: Wiping the Database (Optional)
+If you ever want to perform a "clean slate" reset before a new trading day, you can safely delete the SQLite database. The system will automatically generate a pristine database file with the correct schema on its next startup:
+```bash
+sudo systemctl stop rb-mcp
+rm /home/rb-mcp-user/rb-mcp/hermes.db
+sudo systemctl start rb-mcp
+```
+*(Note: This preserves your `since_id.txt` file so the bot doesn't accidentally fetch old tweets upon restart).*
+
 ### Step 2.6: Dashboard Systemd Service
 The dashboard is a read-only Flask web server. We run it as a separate service so it doesn't block the trading loop.
 
