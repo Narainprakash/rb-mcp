@@ -108,7 +108,8 @@ def process_open_orders():
             # Cancel stale non-0DTE limit buy orders older than 24 hours
             if order['created_at']:
                 created_dt = datetime.strptime(order['created_at'], "%Y-%m-%d %H:%M:%S")
-                age_hours = (datetime.utcnow() - created_dt).total_seconds() / 3600
+                # Use local datetime.now() because created_at is in 'localtime' (EST)
+                age_hours = (datetime.now() - created_dt).total_seconds() / 3600
                 if age_hours > 24:
                     cursor.execute("UPDATE limit_buy_orders SET status = 'cancelled' WHERE id = ?", (order['buy_id'],))
                     log_system_event('system', f"Cancelled stale limit buy order #{order['buy_id']} for {order['ticker']} (age: {age_hours:.1f}h)")

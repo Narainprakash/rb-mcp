@@ -115,10 +115,32 @@ def execute_trade(decision_id: int, alert_id: int, ticker: str, expiry: str, str
 
     try:
         if decision_action == "market_buy":
-            # Immediate fill at live ask
+            # Cap the market buy slippage using max_price
+            tolerance_pct = config.decision.get('price_tolerance_pct', 10)
+            max_price = round(recommended_price * (1 + (tolerance_pct / 100)), 2)
+            
+            # In live mode, this MUST be routed to Robinhood as a Limit Buy at max_price.
+            # In paper mode, we simulate checking the current ask:
             quote = get_live_quote(ticker, expiry, strike, option_type)
-            fill_price = quote['ask']
-            process_buy_fill(decision_id, ticker, expiry, strike, option_type, signal_action, fill_price, contracts, paper_mode, order_id)
+            if quote['ask'] <= max_price:
+                # Immediate fill
+                fill_price = quote['ask']
+                process_buy_fill(decision_id, ticker, expiry, strike, option_type, signal_action, fill_price, contracts, paper_mode, order_id)
+            else:
+                # Spiked above max_price between decision and execution! Drop to pending limit order.
+                conn = get_connection()
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        INSERT INTO limit_buy_orders (decision_id, alert_id, buy_order_id, target_price, quantity, status)
+                        VALUES (?, ?, ?, ?, ?, 'pending')
+                    """, (decision_id, alert_id, order_id, max_price, contracts))
+                    conn.commit()
+                finally:
+                    conn.close()
+                
+                from src.services.notifier import notify_limit_buy_placed
+                notify_limit_buy_placed(contracts, ticker, strike, option_type, max_price, tolerance_pct)
             
         elif decision_action == "limit_buy":
             # Place a limit buy order at a discount

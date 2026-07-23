@@ -15,13 +15,27 @@ def check_daily_spend_limit(requested_spend: float) -> bool:
     conn = get_connection()
     try:
         cursor = conn.cursor()
+        
+        # 1. Filled Trades
         cursor.execute("""
             SELECT sum(fill_price * quantity * 100) as total_spend 
             FROM trades 
             WHERE timestamp >= ? AND timestamp < ?
         """, (start_ny, end_ny))
         row = cursor.fetchone()
-        total_spend = row['total_spend'] if row['total_spend'] else 0.0
+        filled_spend = row['total_spend'] if row['total_spend'] else 0.0
+        
+        # 2. Pending Limit Buys (Locked Capital)
+        cursor.execute("""
+            SELECT sum(target_price * quantity * 100) as pending_spend
+            FROM limit_buy_orders
+            WHERE status = 'pending' AND created_at >= ? AND created_at < ?
+        """, (start_ny, end_ny))
+        row2 = cursor.fetchone()
+        pending_spend = row2['pending_spend'] if row2['pending_spend'] else 0.0
+        
+        total_spend = filled_spend + pending_spend
+        
     finally:
         conn.close()
     
