@@ -33,15 +33,15 @@ def get_current_polling_interval():
             
     return None
 
-def get_today_utc_bounds():
-    """Returns the UTC string start and end of the current NY calendar day."""
+def get_today_ny_bounds():
+    """Returns the local NY string start and end of the current NY calendar day."""
     now_ny = datetime.now(NY_TZ)
     # Start of today in NY
     start_ny = now_ny.replace(hour=0, minute=0, second=0, microsecond=0)
     # Start of tomorrow in NY
     end_ny = start_ny + timedelta(days=1)
     
-    # Convert to UTC string format matching SQLite CURRENT_TIMESTAMP
-    start_utc = start_ny.astimezone(pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
-    end_utc = end_ny.astimezone(pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
-    return start_utc, end_utc
+    # Format directly as string since SQLite now uses localtime
+    start_str = start_ny.strftime("%Y-%m-%d %H:%M:%S")
+    end_str = end_ny.strftime("%Y-%m-%d %H:%M:%S")
+    return start_str, end_str

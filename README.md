@@ -65,6 +65,10 @@ Before installing Hermes, secure your VPS:
    sudo ufw allow ssh
    sudo ufw enable
    ```
+4. **Set Timezone**: The database relies on Local Time to record events strictly in New York market time.
+   ```bash
+   sudo timedatectl set-timezone America/New_York
+   ```
 
 ### Step 2.2: Install NousResearch Hermes Agent
 Install the agent framework that will host the trading bot:
@@ -465,7 +469,7 @@ When you make changes to your code locally and push them to GitHub, you will nee
 ### Twitter Polling Logic & `.since_id`
 The bot relies on a hidden file (`.since_id`) in the root directory to track its place. Every time it polls Twitter, it asks the API: *"Only give me tweets newer than this ID."*
 
-**The Danger:** If that file is missing (like on the very first time you boot up the bot), it defaults to pulling the 5 most recent tweets. If the account hasn't tweeted in a few days, those 5 tweets will be very old, but the bot could process them as if they are brand new and execute late trades!
+**The Danger:** If that file is missing (like on the very first time you boot up the bot), it defaults to pulling the 50 most recent tweets. If the account hasn't tweeted in a few days, those 50 tweets will be very old, but the bot could process them as if they are brand new and execute late trades!
 
 **The Safeguard:** To prevent this scenario, the poller is hardcoded to explicitly check the `tweet.created_at` timestamp. It compares the tweet's calendar date to the current calendar date (in New York Time). If a tweet is from a previous day, the bot will silently ignore it and advance its `.since_id` tracker. This ensures the bot will never trade an old tweet on its initial startup.
 

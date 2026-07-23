@@ -264,6 +264,8 @@ Config: webhook URL, per-event-type on/off toggles, and a rate limit (so a burst
 - `api_calls` — service (X / Robinhood), endpoint, timestamp
 - `system_events` — kill switch toggles, config changes, errors, service restarts
 
+**Timezones**: All database timestamps are recorded in New York Local Time (EST/EDT) using SQLite's `localtime` modifier, rather than UTC.
+
 **Performance Indexes**: To prevent full table scans during the 2-second polling loops, the schema includes indexes on `alerts(parse_status)`, `limit_orders(status)`, `limit_buy_orders(status)`, and a composite index on `positions(ticker, expiry, strike, option_type, status)`.
 
 ### 7.2 Dashboard Views

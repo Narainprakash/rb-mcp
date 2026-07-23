@@ -104,7 +104,7 @@ def start_poller():
             response = client.get_users_tweets(
                 id=target_user_id,
                 since_id=since_id,
-                max_results=5,
+                max_results=50,
                 tweet_fields=["created_at"]
             )
             log_api_call('x', 'get_users_tweets')

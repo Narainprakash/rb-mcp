@@ -51,7 +51,7 @@ def process_open_orders():
                 
                 cursor.execute("""
                     UPDATE limit_orders 
-                    SET status = 'filled', fill_timestamp = CURRENT_TIMESTAMP, realized_pnl = ?
+                    SET status = 'filled', fill_timestamp = datetime('now', 'localtime'), realized_pnl = ?
                     WHERE id = ?
                 """, (pnl_dollars, order['limit_id']))
                 
@@ -71,7 +71,7 @@ def process_open_orders():
                     
                     cursor.execute("""
                         UPDATE limit_orders 
-                        SET status = 'filled', fill_timestamp = CURRENT_TIMESTAMP, realized_pnl = ?
+                        SET status = 'filled', fill_timestamp = datetime('now', 'localtime'), realized_pnl = ?
                         WHERE id = ?
                     """, (pnl_dollars, order['limit_id']))
                     
@@ -141,7 +141,7 @@ def process_open_orders():
                     # Mark as filled
                     cursor.execute("""
                         UPDATE limit_buy_orders 
-                        SET status = 'filled', fill_timestamp = CURRENT_TIMESTAMP
+                        SET status = 'filled', fill_timestamp = datetime('now', 'localtime')
                         WHERE id = ?
                     """, (order['buy_id'],))
             else:

@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS alerts (
     price REAL,
     trade_style TEXT,
     parse_status TEXT NOT NULL, -- 'success' or 'needs_review'
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+    timestamp DATETIME DEFAULT (datetime('now', 'localtime'))
 );
 
 CREATE TABLE IF NOT EXISTS decisions (
@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS decisions (
     observed_price REAL,
     action_taken TEXT NOT NULL, -- 'buy', 'skip', 'error'
     reasoning TEXT,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    timestamp DATETIME DEFAULT (datetime('now', 'localtime')),
     FOREIGN KEY(alert_id) REFERENCES alerts(id)
 );
 
@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS trades (
     fill_price REAL,
     quantity INTEGER,
     status TEXT NOT NULL, -- 'open', 'closed', 'expired'
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    timestamp DATETIME DEFAULT (datetime('now', 'localtime')),
     FOREIGN KEY(decision_id) REFERENCES decisions(id)
 );
 
@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS positions (
     total_quantity INTEGER DEFAULT 0,
     average_cost REAL DEFAULT 0.0,
     status TEXT NOT NULL, -- 'open', 'closed'
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
 );
 
 CREATE TABLE IF NOT EXISTS limit_orders (
@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS limit_orders (
     status TEXT NOT NULL, -- 'pending', 'filled', 'cancelled'
     fill_timestamp DATETIME,
     realized_pnl REAL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    created_at DATETIME DEFAULT (datetime('now', 'localtime')),
     FOREIGN KEY(position_id) REFERENCES positions(id)
 );
 
@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS limit_buy_orders (
     quantity INTEGER NOT NULL,
     status TEXT NOT NULL, -- 'pending', 'filled', 'cancelled'
     fill_timestamp DATETIME,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    created_at DATETIME DEFAULT (datetime('now', 'localtime')),
     FOREIGN KEY(decision_id) REFERENCES decisions(id),
     FOREIGN KEY(alert_id) REFERENCES alerts(id)
 );
@@ -84,14 +84,14 @@ CREATE TABLE IF NOT EXISTS api_calls (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     service TEXT NOT NULL, -- 'x' or 'robinhood'
     endpoint TEXT NOT NULL,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+    timestamp DATETIME DEFAULT (datetime('now', 'localtime'))
 );
 
 CREATE TABLE IF NOT EXISTS system_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     event_type TEXT NOT NULL,
     message TEXT,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+    timestamp DATETIME DEFAULT (datetime('now', 'localtime'))
 );
 
 -- Performance Indexes

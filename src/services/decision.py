@@ -3,13 +3,13 @@ from src.core.config import config
 from src.core.db import get_connection
 from src.services.notifier import notify_skipped
 
-from src.core.time_utils import get_today_utc_bounds
+from src.core.time_utils import get_today_ny_bounds
 
 def check_daily_spend_limit(requested_spend: float) -> bool:
     """Checks if requested spend exceeds max_daily_spend_usd limit"""
     limit = config.decision.get('max_daily_spend_usd', 500)
     
-    start_utc, end_utc = get_today_utc_bounds()
+    start_ny, end_ny = get_today_ny_bounds()
     
     # Get total spend today
     conn = get_connection()
@@ -19,7 +19,7 @@ def check_daily_spend_limit(requested_spend: float) -> bool:
             SELECT sum(fill_price * quantity * 100) as total_spend 
             FROM trades 
             WHERE timestamp >= ? AND timestamp < ?
-        """, (start_utc, end_utc))
+        """, (start_ny, end_ny))
         row = cursor.fetchone()
         total_spend = row['total_spend'] if row['total_spend'] else 0.0
     finally:

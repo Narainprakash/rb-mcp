@@ -4,7 +4,7 @@ from datetime import datetime
 
 from src.core.config import config
 from src.core.db import get_connection, log_system_event
-from src.core.time_utils import NY_TZ, get_today_utc_bounds
+from src.core.time_utils import NY_TZ, get_today_ny_bounds
 
 def get_daily_metrics(date_str):
     """Fetches PnL, Trades, Alerts, Open Positions, and API calls for the given NY date string."""
@@ -12,7 +12,7 @@ def get_daily_metrics(date_str):
     try:
         cursor = conn.cursor()
         
-        start_utc, end_utc = get_today_utc_bounds()
+        start_utc, end_utc = get_today_ny_bounds()
         
         # API Calls
         cursor.execute("SELECT COUNT(*) as api_calls FROM api_calls WHERE timestamp >= ? AND timestamp < ?", (start_utc, end_utc))

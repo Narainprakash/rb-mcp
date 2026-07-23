@@ -71,7 +71,7 @@ def process_buy_fill(decision_id: int, ticker: str, expiry: str, strike: float, 
             
             cursor.execute("""
                 UPDATE positions 
-                SET total_quantity = ?, average_cost = ?, updated_at = CURRENT_TIMESTAMP
+                SET total_quantity = ?, average_cost = ?, updated_at = datetime('now', 'localtime')
                 WHERE id = ?
             """, (new_quantity, new_avg_cost, position_id))
             
