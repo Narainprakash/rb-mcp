@@ -13,14 +13,24 @@ document.addEventListener("DOMContentLoaded", () => {
     const settingsModal = document.getElementById('settings-modal');
     const settingsCancel = document.getElementById('settings-cancel');
     const settingsSave = document.getElementById('settings-save');
-    const settingsJson = document.getElementById('settings-json');
+    
+    let currentSettings = {};
 
     if (settingsBtn) {
         settingsBtn.addEventListener('click', async () => {
             try {
                 const res = await fetch('/api/settings');
-                const data = await res.json();
-                settingsJson.value = JSON.stringify(data, null, 4);
+                currentSettings = await res.json();
+                
+                // Populate UI
+                document.getElementById('set_paper_mode').checked = currentSettings.execution?.paper_mode ?? true;
+                document.getElementById('set_contracts_per_signal').value = currentSettings.decision?.contracts_per_signal ?? 1;
+                document.getElementById('set_take_profit_pct').value = currentSettings.decision?.take_profit_pct ?? 20;
+                document.getElementById('set_price_tolerance_pct').value = currentSettings.decision?.price_tolerance_pct ?? 10;
+                document.getElementById('set_limit_buy_discount_pct').value = currentSettings.decision?.limit_buy_discount_pct ?? 20;
+                document.getElementById('set_max_daily_spend_usd').value = currentSettings.decision?.max_daily_spend_usd ?? 5000;
+                document.getElementById('set_max_open_positions').value = currentSettings.decision?.max_open_positions ?? 10;
+                
                 settingsModal.style.display = 'flex';
             } catch (e) {
                 console.error("Failed to fetch settings", e);
@@ -38,11 +48,22 @@ document.addEventListener("DOMContentLoaded", () => {
     if (settingsSave) {
         settingsSave.addEventListener('click', async () => {
             try {
-                const newConfig = JSON.parse(settingsJson.value);
+                // Read from UI
+                if (!currentSettings.execution) currentSettings.execution = {};
+                if (!currentSettings.decision) currentSettings.decision = {};
+                
+                currentSettings.execution.paper_mode = document.getElementById('set_paper_mode').checked;
+                currentSettings.decision.contracts_per_signal = parseInt(document.getElementById('set_contracts_per_signal').value) || 1;
+                currentSettings.decision.take_profit_pct = parseInt(document.getElementById('set_take_profit_pct').value) || 20;
+                currentSettings.decision.price_tolerance_pct = parseInt(document.getElementById('set_price_tolerance_pct').value) || 10;
+                currentSettings.decision.limit_buy_discount_pct = parseInt(document.getElementById('set_limit_buy_discount_pct').value) || 20;
+                currentSettings.decision.max_daily_spend_usd = parseInt(document.getElementById('set_max_daily_spend_usd').value) || 5000;
+                currentSettings.decision.max_open_positions = parseInt(document.getElementById('set_max_open_positions').value) || 10;
+
                 const res = await fetch('/api/settings', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(newConfig)
+                    body: JSON.stringify(currentSettings)
                 });
                 
                 if (res.ok) {
@@ -53,7 +74,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
             } catch (e) {
                 console.error("Save error", e);
-                alert("Invalid JSON format or network error.");
+                alert("Network error saving settings.");
             }
         });
     }
