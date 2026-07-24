@@ -39,11 +39,15 @@ def query_db(query, args=(), one=False):
     return (rv[0] if rv else None) if one else rv
 
 class User(UserMixin):
-    def __init__(self, id, username, is_admin, is_active):
-        self.id = id
+    def __init__(self, id, username, is_admin, active_status):
+        self.id = str(id)
         self.username = username
         self.is_admin = is_admin
-        self.is_active = is_active
+        self.active_status = active_status
+
+    @property
+    def is_active(self):
+        return bool(self.active_status)
 
 @login_manager.user_loader
 def load_user(user_id):
