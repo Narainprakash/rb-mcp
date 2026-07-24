@@ -370,6 +370,10 @@ gateway:
 **`<project_root>/.env`** — Trading-level secrets (Twitter, Discord, Robinhood):
 ```
 TWITTER_BEARER_TOKEN=your_twitter_bearer_token
+TWITTER_API_KEY=your_api_key_here
+TWITTER_API_SECRET=your_api_secret_here
+TWITTER_ACCESS_TOKEN=your_access_token_here
+TWITTER_ACCESS_TOKEN_SECRET=your_access_token_secret_here
 DISCORD_WEBHOOK_URL=your_discord_webhook_url
 ROBINHOOD_USERNAME=
 ROBINHOOD_PASSWORD=
