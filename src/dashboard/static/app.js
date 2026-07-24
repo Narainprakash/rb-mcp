@@ -192,11 +192,19 @@ async function fetchFeed() {
             
             div.className = itemClass;
             
-            const timeStr = item.alert_time.split(' ')[1].substring(0, 5);
+            const timeStr = item.alert_time.substring(0, 16);
             
-            const header = `${item.action} $${item.ticker} ${item.strike}${item.option_type} @ ${item.rec_price}`;
+            let header = "Unparsed Alert";
+            if (item.parse_status === 'success') {
+                header = `${item.action} $${item.ticker} ${item.strike}${item.option_type} @ ${item.rec_price}`;
+            } else if (item.parse_status === 'ignored') {
+                header = "Ignored Tweet";
+            }
+            
             let body = "Processing...";
-            if (item.reasoning) {
+            if (item.parse_status !== 'success') {
+                body = item.raw_text ? item.raw_text.substring(0, 100) + '...' : "No text available";
+            } else if (item.reasoning) {
                 body = `Decision: ${item.action_taken.toUpperCase()} - ${item.reasoning}`;
             }
             if (item.trade_status) {
@@ -284,7 +292,7 @@ async function fetchEvents() {
             const div = document.createElement('div');
             div.className = 'feed-item';
             
-            const timeStr = event.timestamp.split(' ')[1].substring(0, 5);
+            const timeStr = event.timestamp.substring(0, 16);
             
             div.innerHTML = `
                 <div class="feed-time">${timeStr} ET</div>

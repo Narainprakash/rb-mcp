@@ -86,7 +86,7 @@ def feed():
     data = query_db("""
         SELECT a.id, a.timestamp as alert_time, a.action, a.ticker, a.expiry, a.strike, a.option_type, a.price as rec_price,
                d.action_taken, d.observed_price, d.reasoning,
-               t.status as trade_status, t.paper_mode
+               t.status as trade_status, t.paper_mode, a.raw_text, a.parse_status
         FROM alerts a
         LEFT JOIN decisions d ON a.id = d.alert_id
         LEFT JOIN trades t ON d.id = t.decision_id
