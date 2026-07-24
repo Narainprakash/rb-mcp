@@ -57,4 +57,20 @@ class Config:
     def twitter_bearer_token(self):
         return os.getenv("TWITTER_BEARER_TOKEN")
 
+    @property
+    def twitter_api_key(self):
+        return os.getenv("TWITTER_API_KEY")
+        
+    @property
+    def twitter_api_secret(self):
+        return os.getenv("TWITTER_API_SECRET")
+        
+    @property
+    def twitter_access_token(self):
+        return os.getenv("TWITTER_ACCESS_TOKEN")
+        
+    @property
+    def twitter_access_token_secret(self):
+        return os.getenv("TWITTER_ACCESS_TOKEN_SECRET")
+
 config = Config()

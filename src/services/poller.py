@@ -59,11 +59,17 @@ def start_poller():
     from src.core.db import log_system_event
     log_system_event('startup', 'Hermes Poller started')
     
-    if not config.twitter_bearer_token:
-        print("ERROR: TWITTER_BEARER_TOKEN not found in .env")
+    if not config.twitter_api_key or not config.twitter_access_token:
+        print("ERROR: TWITTER_API_KEY or TWITTER_ACCESS_TOKEN not found in .env. Required for private accounts.")
         return
         
-    client = tweepy.Client(bearer_token=config.twitter_bearer_token)
+    client = tweepy.Client(
+        bearer_token=config.twitter_bearer_token,
+        consumer_key=config.twitter_api_key,
+        consumer_secret=config.twitter_api_secret,
+        access_token=config.twitter_access_token,
+        access_token_secret=config.twitter_access_token_secret
+    )
     
     # 1. Get Target User ID
     target_account = config.polling.get("target_account", "kttechprivate")
@@ -114,6 +120,15 @@ def start_poller():
                     tweet_fields=["created_at"]
                 )
                 log_api_call('x', 'get_users_tweets')
+                
+                if response.errors:
+                    error_msg = str(response.errors)
+                    print(f"TWITTER API ERROR: {error_msg}")
+                    notify_error("Poller", f"Silent API Error: {error_msg[:100]}...")
+                    # Sleep to prevent spamming notifications for the same error
+                    time.sleep(300)
+                    continue
+
                 
                 if response.data:
                     # Tweets are returned newest first. Reverse to process oldest first.
