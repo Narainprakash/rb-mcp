@@ -117,7 +117,8 @@ def start_poller():
                     id=target_user_id,
                     since_id=since_id,
                     max_results=50,
-                    tweet_fields=["created_at"]
+                    tweet_fields=["created_at"],
+                    user_auth=True
                 )
                 log_api_call('x', 'get_users_tweets')
                 
