@@ -238,28 +238,28 @@
                 </div>
                 
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
-                    <div style="display: flex; flex-direction: column;">
-                        <label style="font-size: 0.85rem; margin-bottom: 0.25rem;">Contracts per Signal</label>
+                    <div style="display: flex; flex-direction: column;" title="Number of option contracts to buy for every trade signal.">
+                        <label style="font-size: 0.85rem; margin-bottom: 0.25rem; cursor: help; border-bottom: 1px dotted rgba(255,255,255,0.3); width: fit-content;">Contracts per Signal</label>
                         <input type="number" id="set_contracts_per_signal" style="padding: 0.5rem; background: rgba(0,0,0,0.3); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;">
                     </div>
-                    <div style="display: flex; flex-direction: column;">
-                        <label style="font-size: 0.85rem; margin-bottom: 0.25rem;">Max Open Positions</label>
+                    <div style="display: flex; flex-direction: column;" title="Hard cap on the number of simultaneous active option positions allowed.">
+                        <label style="font-size: 0.85rem; margin-bottom: 0.25rem; cursor: help; border-bottom: 1px dotted rgba(255,255,255,0.3); width: fit-content;">Max Open Positions</label>
                         <input type="number" id="set_max_open_positions" style="padding: 0.5rem; background: rgba(0,0,0,0.3); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;">
                     </div>
-                    <div style="display: flex; flex-direction: column;">
-                        <label style="font-size: 0.85rem; margin-bottom: 0.25rem;">Take Profit (%)</label>
+                    <div style="display: flex; flex-direction: column;" title="Target profit percentage for the automated limit sell order (e.g. 20%).">
+                        <label style="font-size: 0.85rem; margin-bottom: 0.25rem; cursor: help; border-bottom: 1px dotted rgba(255,255,255,0.3); width: fit-content;">Take Profit (%)</label>
                         <input type="number" id="set_take_profit_pct" style="padding: 0.5rem; background: rgba(0,0,0,0.3); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;">
                     </div>
-                    <div style="display: flex; flex-direction: column;">
-                        <label style="font-size: 0.85rem; margin-bottom: 0.25rem;">Limit Buy Discount (%)</label>
+                    <div style="display: flex; flex-direction: column;" title="If the live ask is lower than the alert price, places a limit buy at this discount to catch dips.">
+                        <label style="font-size: 0.85rem; margin-bottom: 0.25rem; cursor: help; border-bottom: 1px dotted rgba(255,255,255,0.3); width: fit-content;">Limit Buy Discount (%)</label>
                         <input type="number" id="set_limit_buy_discount_pct" style="padding: 0.5rem; background: rgba(0,0,0,0.3); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;">
                     </div>
-                    <div style="display: flex; flex-direction: column;">
-                        <label style="font-size: 0.85rem; margin-bottom: 0.25rem;">Price Tolerance (%)</label>
+                    <div style="display: flex; flex-direction: column;" title="Max acceptable markup percentage from the alerted entry price. If market ask exceeds this, trade is skipped.">
+                        <label style="font-size: 0.85rem; margin-bottom: 0.25rem; cursor: help; border-bottom: 1px dotted rgba(255,255,255,0.3); width: fit-content;">Price Tolerance (%)</label>
                         <input type="number" id="set_price_tolerance_pct" style="padding: 0.5rem; background: rgba(0,0,0,0.3); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;">
                     </div>
-                    <div style="display: flex; flex-direction: column;">
-                        <label style="font-size: 0.85rem; margin-bottom: 0.25rem;">Max Daily Spend ($)</label>
+                    <div style="display: flex; flex-direction: column;" title="Maximum total dollars allowed to be deployed in a single calendar day.">
+                        <label style="font-size: 0.85rem; margin-bottom: 0.25rem; cursor: help; border-bottom: 1px dotted rgba(255,255,255,0.3); width: fit-content;">Max Daily Spend ($)</label>
                         <input type="number" id="set_max_daily_spend_usd" style="padding: 0.5rem; background: rgba(0,0,0,0.3); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;">
                     </div>
                 </div>
