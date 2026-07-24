@@ -8,6 +8,56 @@ document.addEventListener("DOMContentLoaded", () => {
     fetchEvents();
     fetchFailures();
 
+    // Settings Modal Logic
+    const settingsBtn = document.getElementById('settings-btn');
+    const settingsModal = document.getElementById('settings-modal');
+    const settingsCancel = document.getElementById('settings-cancel');
+    const settingsSave = document.getElementById('settings-save');
+    const settingsJson = document.getElementById('settings-json');
+
+    if (settingsBtn) {
+        settingsBtn.addEventListener('click', async () => {
+            try {
+                const res = await fetch('/api/settings');
+                const data = await res.json();
+                settingsJson.value = JSON.stringify(data, null, 4);
+                settingsModal.style.display = 'flex';
+            } catch (e) {
+                console.error("Failed to fetch settings", e);
+                alert("Failed to fetch settings.");
+            }
+        });
+    }
+
+    if (settingsCancel) {
+        settingsCancel.addEventListener('click', () => {
+            settingsModal.style.display = 'none';
+        });
+    }
+
+    if (settingsSave) {
+        settingsSave.addEventListener('click', async () => {
+            try {
+                const newConfig = JSON.parse(settingsJson.value);
+                const res = await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(newConfig)
+                });
+                
+                if (res.ok) {
+                    settingsModal.style.display = 'none';
+                    alert("Settings saved successfully.");
+                } else {
+                    alert("Failed to save settings.");
+                }
+            } catch (e) {
+                console.error("Save error", e);
+                alert("Invalid JSON format or network error.");
+            }
+        });
+    }
+
     // Tab Logic
     const tabSignals = document.getElementById('tab-signals');
     const tabEvents = document.getElementById('tab-events');

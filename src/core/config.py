@@ -1,15 +1,16 @@
 import os
 import yaml
+import json
 from dotenv import load_dotenv
 
 load_dotenv()
 
-class Config:
+class SystemConfig:
     _instance = None
 
     def __new__(cls):
         if cls._instance is None:
-            cls._instance = super(Config, cls).__new__(cls)
+            cls._instance = super(SystemConfig, cls).__new__(cls)
             cls._instance._load_config()
         return cls._instance
 
@@ -26,28 +27,12 @@ class Config:
         return self.settings.get('polling', {})
     
     @property
-    def decision(self):
-        return self.settings.get('decision', {})
-    
-    @property
-    def execution(self):
-        return self.settings.get('execution', {})
-    
-    @property
-    def notifications(self):
-        return self.settings.get('notifications', {})
-    
-    @property
     def dashboard(self):
         return self.settings.get('dashboard', {})
 
     @property
     def gateway(self):
         return self.settings.get('gateway', {})
-        
-    @property
-    def summary(self):
-        return self.settings.get('summary', {})
 
     @property
     def discord_webhook_url(self):
@@ -73,4 +58,55 @@ class Config:
     def twitter_access_token_secret(self):
         return os.getenv("TWITTER_ACCESS_TOKEN_SECRET")
 
-config = Config()
+# Global singleton for system-wide configuration
+system_config = SystemConfig()
+
+class UserConfigManager:
+    """Manages retrieving and merging user-specific configurations from the database."""
+    
+    def __init__(self, user_id):
+        self.user_id = user_id
+        self._system_defaults = system_config.settings
+        self._user_settings = self._load_user_settings()
+
+    def _load_user_settings(self):
+        # Local import to avoid circular dependency
+        from src.core.db import get_connection
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT config_json FROM user_configs WHERE user_id = ?", (self.user_id,))
+            row = cursor.fetchone()
+            if row and row['config_json']:
+                return json.loads(row['config_json'])
+            return {}
+        finally:
+            conn.close()
+
+    def _merge(self, section):
+        default = self._system_defaults.get(section, {})
+        user_override = self._user_settings.get(section, {})
+        merged = default.copy()
+        merged.update(user_override)
+        return merged
+
+    @property
+    def decision(self):
+        return self._merge('decision')
+    
+    @property
+    def execution(self):
+        return self._merge('execution')
+    
+    @property
+    def notifications(self):
+        return self._merge('notifications')
+        
+    @property
+    def summary(self):
+        return self._merge('summary')
+
+def get_user_config(user_id):
+    """Factory function to get a UserConfigManager for a specific user."""
+    return UserConfigManager(user_id)
+

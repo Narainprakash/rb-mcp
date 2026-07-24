@@ -1,7 +1,7 @@
 import random
 import uuid
 import math
-from src.core.config import config
+from src.core.config import get_user_config
 from src.core.db import get_connection, log_system_event
 from src.services.notifier import (
     notify_executed_live, 
@@ -10,7 +10,7 @@ from src.services.notifier import (
     notify_error
 )
 
-# Circuit breaker: tracks consecutive execution errors
+# Circuit breaker: tracks consecutive execution errors globally
 _consecutive_errors = 0
 
 def get_live_quote(ticker, expiry, strike, option_type):
@@ -24,39 +24,42 @@ def get_live_quote(ticker, expiry, strike, option_type):
     ask = round(base + 0.05, 2)
     return {"bid": bid, "ask": ask}
 
-def process_buy_fill(decision_id: int, ticker: str, expiry: str, strike: float, option_type: str, signal_action: str, fill_price: float, contracts: int, paper_mode: bool, order_id: str):
+def process_buy_fill(user_id: int, decision_id: int, ticker: str, expiry: str, strike: float, option_type: str, signal_action: str, fill_price: float, contracts: int, paper_mode: bool, order_id: str):
     """
-    Handles the post-fill logic for a buy order: logs trade, updates position, places take-profit limit sell.
+    Handles the post-fill logic for a buy order scoped to a specific user.
     Used by both immediate market buys and when a limit buy fills.
+    It logs the trade to the specific user_id, updates their independent position ledger, 
+    and places a take-profit limit sell scoped to that user.
     """
+    config = get_user_config(user_id)
     conn = get_connection()
     try:
         cursor = conn.cursor()
         
         # 1. Log Trade
         cursor.execute("""
-            INSERT INTO trades (decision_id, paper_mode, buy_order_id, fill_price, quantity, status)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (decision_id, paper_mode, order_id, fill_price, contracts, 'open'))
+            INSERT INTO trades (user_id, decision_id, paper_mode, buy_order_id, fill_price, quantity, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (user_id, decision_id, paper_mode, order_id, fill_price, contracts, 'open'))
         
         if paper_mode:
-            notify_executed_paper(contracts, ticker, strike, option_type, fill_price)
+            notify_executed_paper(user_id, contracts, ticker, strike, option_type, fill_price)
         else:
-            notify_executed_live(contracts, ticker, strike, option_type, fill_price)
+            notify_executed_live(user_id, contracts, ticker, strike, option_type, fill_price)
 
         # 2. Position Management
         cursor.execute("""
             SELECT id, total_quantity, average_cost FROM positions 
-            WHERE ticker = ? AND expiry = ? AND strike = ? AND option_type = ? AND status = 'open'
-        """, (ticker, expiry, strike, option_type))
+            WHERE user_id = ? AND ticker = ? AND expiry = ? AND strike = ? AND option_type = ? AND status = 'open'
+        """, (user_id, ticker, expiry, strike, option_type))
         position_row = cursor.fetchone()
         
         if signal_action == "BTO" or not position_row:
             # Create new position
             cursor.execute("""
-                INSERT INTO positions (ticker, expiry, strike, option_type, total_quantity, average_cost, status)
-                VALUES (?, ?, ?, ?, ?, ?, 'open')
-            """, (ticker, expiry, strike, option_type, contracts, fill_price))
+                INSERT INTO positions (user_id, ticker, expiry, strike, option_type, total_quantity, average_cost, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'open')
+            """, (user_id, ticker, expiry, strike, option_type, contracts, fill_price))
             position_id = cursor.lastrowid
             new_quantity = contracts
             new_avg_cost = fill_price
@@ -89,23 +92,24 @@ def process_buy_fill(decision_id: int, ticker: str, expiry: str, strike: float, 
         sell_order_id = f"sim_sell_{uuid.uuid4().hex[:8]}" if paper_mode else "real_mcp_sell_id"
         
         cursor.execute("""
-            INSERT INTO limit_orders (position_id, sell_order_id, target_price, status)
-            VALUES (?, ?, ?, 'pending')
-        """, (position_id, sell_order_id, target_sell_price))
+            INSERT INTO limit_orders (user_id, position_id, sell_order_id, target_price, status)
+            VALUES (?, ?, ?, ?, 'pending')
+        """, (user_id, position_id, sell_order_id, target_sell_price))
         
         conn.commit()
     finally:
         conn.close()
     
-    notify_limit_sell_placed(new_quantity, ticker, strike, option_type, target_sell_price, take_profit_pct)
+    notify_limit_sell_placed(user_id, new_quantity, ticker, strike, option_type, target_sell_price, take_profit_pct)
 
 
-def execute_trade(decision_id: int, alert_id: int, ticker: str, expiry: str, strike: float, option_type: str, signal_action: str, decision_action: str, recommended_price: float):
+def execute_trade(user_id: int, decision_id: int, alert_id: int, ticker: str, expiry: str, strike: float, option_type: str, signal_action: str, decision_action: str, recommended_price: float):
     """
-    Routes the execution based on the decision engine's output (market_buy or limit_buy).
-    Implements a circuit breaker that engages the kill switch after N consecutive errors.
+    Routes the execution based on the user-specific decision engine's output (market_buy or limit_buy).
+    Implements a circuit breaker that engages the kill switch globally after N consecutive errors.
     """
     global _consecutive_errors
+    config = get_user_config(user_id)
     
     paper_mode = config.execution.get('paper_mode', True)
     contracts = config.decision.get('contracts_per_signal', 1)
@@ -125,22 +129,22 @@ def execute_trade(decision_id: int, alert_id: int, ticker: str, expiry: str, str
             if quote['ask'] <= max_price:
                 # Immediate fill
                 fill_price = quote['ask']
-                process_buy_fill(decision_id, ticker, expiry, strike, option_type, signal_action, fill_price, contracts, paper_mode, order_id)
+                process_buy_fill(user_id, decision_id, ticker, expiry, strike, option_type, signal_action, fill_price, contracts, paper_mode, order_id)
             else:
                 # Spiked above max_price between decision and execution! Drop to pending limit order.
                 conn = get_connection()
                 try:
                     cursor = conn.cursor()
                     cursor.execute("""
-                        INSERT INTO limit_buy_orders (decision_id, alert_id, buy_order_id, target_price, quantity, status)
-                        VALUES (?, ?, ?, ?, ?, 'pending')
-                    """, (decision_id, alert_id, order_id, max_price, contracts))
+                        INSERT INTO limit_buy_orders (user_id, decision_id, alert_id, buy_order_id, target_price, quantity, status)
+                        VALUES (?, ?, ?, ?, ?, ?, 'pending')
+                    """, (user_id, decision_id, alert_id, order_id, max_price, contracts))
                     conn.commit()
                 finally:
                     conn.close()
                 
                 from src.services.notifier import notify_limit_buy_placed
-                notify_limit_buy_placed(contracts, ticker, strike, option_type, max_price, tolerance_pct)
+                notify_limit_buy_placed(user_id, contracts, ticker, strike, option_type, max_price, tolerance_pct)
             
         elif decision_action == "limit_buy":
             # Place a limit buy order at a discount
@@ -151,26 +155,28 @@ def execute_trade(decision_id: int, alert_id: int, ticker: str, expiry: str, str
             try:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    INSERT INTO limit_buy_orders (decision_id, alert_id, buy_order_id, target_price, quantity, status)
-                    VALUES (?, ?, ?, ?, ?, 'pending')
-                """, (decision_id, alert_id, order_id, target_buy_price, contracts))
+                    INSERT INTO limit_buy_orders (user_id, decision_id, alert_id, buy_order_id, target_price, quantity, status)
+                    VALUES (?, ?, ?, ?, ?, ?, 'pending')
+                """, (user_id, decision_id, alert_id, order_id, target_buy_price, contracts))
                 conn.commit()
             finally:
                 conn.close()
             
             from src.services.notifier import notify_limit_buy_placed
-            notify_limit_buy_placed(contracts, ticker, strike, option_type, target_buy_price, discount_pct)
+            notify_limit_buy_placed(user_id, contracts, ticker, strike, option_type, target_buy_price, discount_pct)
         
         # Success: reset consecutive error counter
         _consecutive_errors = 0
         
     except Exception as e:
         _consecutive_errors += 1
-        log_system_event('error', f"Execution error #{_consecutive_errors}: {e}")
-        notify_error("Executor", f"Trade execution failed ({_consecutive_errors}/{breaker_limit}): {e}")
+        log_system_event('error', f"Execution error #{_consecutive_errors}: {e}", user_id=user_id)
+        notify_error("Executor", f"Trade execution failed ({_consecutive_errors}/{breaker_limit}): {e}", user_id=user_id)
         
         if _consecutive_errors >= breaker_limit:
-            log_system_event('kill_switch', f"Circuit breaker tripped after {_consecutive_errors} consecutive execution errors")
+            log_system_event('kill_switch', f"Circuit breaker tripped after {_consecutive_errors} consecutive execution errors", user_id=user_id)
             from src.core.security import engage_kill_switch
             engage_kill_switch()
-            notify_error("Executor", f"CIRCUIT BREAKER: Kill switch engaged after {_consecutive_errors} consecutive errors")
+            notify_error("Executor", f"CIRCUIT BREAKER: Kill switch engaged after {_consecutive_errors} consecutive errors", user_id=user_id)
+
+

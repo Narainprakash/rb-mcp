@@ -3,15 +3,16 @@
 Hermes is a self-hosted agent that polls an X (Twitter) account for options trading signals, parses them with zero latency using regex, applies predefined risk management and sizing rules, and automatically executes them via Robinhood's Agentic Trading MCP.
 
 ## Features
+- **Multi-Tenant Architecture**: Supports multiple users in a single instance, each with their own Robinhood MCP account, risk settings, and personalized dashboard login.
 - **Zero-Latency Parsing**: Uses pure regex to parse highly structured signals, completely avoiding LLM latency and cost.
-- **Strict Risk Controls**: Enforces maximum daily spend, per-trade limits, per-position limits, and maximum open positions.
+- **Strict Risk Controls**: Enforces maximum daily spend, per-trade limits, per-position limits, and maximum open positions per user.
 - **Discount Limit Buys**: If the live market ask is cheaper than the alert price, the bot places a limit buy order at a configurable discount (e.g., 20% lower) to catch dips, rather than buying at market.
 - **Automated Take-Profit**: Automatically places configurable limit sell orders (e.g., 20% profit target) upon execution.
 - **0DTE Protection**: Auto-cancels and market-sells open 0DTE limit orders at 15:50 ET to avoid total loss.
 - **Hard Kill Switch**: An instant global kill switch via a simple `HALT` file presence check that immediately stops all trading.
 - **Circuit Breaker**: Automatically engages the kill switch after N consecutive execution errors (default 3) to prevent runaway failures.
 - **Stale Order Cleanup**: Automatically cancels unfilled limit buy orders after 24 hours to prevent orphaned orders.
-- **Daily Summary Push**: A configurable end-of-day report (P/L, Trades, Alerts, Open Positions, API Calls) sent via WhatsApp/Telegram.
+- **Daily Summary Push**: A configurable end-of-day report (P/L, Trades, Alerts, Open Positions, API Calls) sent via WhatsApp/Telegram to each user.
 
 ---
 
@@ -149,13 +150,19 @@ rm /home/rb-mcp-user/rb-mcp/HALT
 If you ever want to perform a "clean slate" reset before a new trading day, you can safely delete the SQLite database. The system will automatically generate a pristine database file with the correct schema on its next startup:
 ```bash
 sudo systemctl stop rb-mcp
-rm /home/rb-mcp-user/rb-mcp/hermes.db
+rm /home/rb-mcp-user/rb-mcp/hermes_mt.db
 sudo systemctl start rb-mcp
 ```
 *(Note: This preserves your `since_id.txt` file so the bot doesn't accidentally fetch old tweets upon restart).*
 
 ### Step 2.6: Dashboard Systemd Service
-The dashboard is a read-only Flask web server. We run it as a separate service so it doesn't block the trading loop.
+The dashboard is a read-only Flask web server that requires user authentication. We run it as a separate service so it doesn't block the trading loop.
+
+Note: You must insert at least one user into the `users` table manually to login. For example:
+```bash
+python -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('password123'))"
+sqlite3 hermes_mt.db "INSERT INTO users (username, password_hash) VALUES ('admin', 'hash_from_above');"
+```
 
 1. Create a systemd service for the dashboard:
    ```bash

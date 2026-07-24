@@ -13,6 +13,7 @@ def trade_loop():
     """
     Independent loop that reads unprocessed alerts from the database,
     makes trading decisions, executes them, and monitors open orders.
+    Fans out to all active users.
     """
     print("Starting Hermes Trade & Execution Loop...")
     from src.core.db import log_system_event
@@ -30,57 +31,69 @@ def trade_loop():
                 time.sleep(60)
                 continue
                 
-            # 3. Process Open Orders (Take-Profit & 0DTE cutoffs)
+            # 3. Process Open Orders (Take-Profit & 0DTE cutoffs) - Handles all users internally
             process_open_orders()
             
-            # 4. Find alerts that haven't been decisioned yet
+            # Fetch active users
             conn = get_connection()
             try:
                 cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT a.* FROM alerts a
-                    LEFT JOIN decisions d ON a.id = d.alert_id
-                    WHERE a.parse_status = 'success' AND d.id IS NULL
-                    ORDER BY a.timestamp ASC
-                """)
-                pending_alerts = cursor.fetchall()
+                cursor.execute("SELECT id FROM users WHERE is_active = 1")
+                active_users = [row['id'] for row in cursor.fetchall()]
             finally:
                 conn.close()
-            
-            for alert in pending_alerts:
-                print(f"Processing decision for alert ID {alert['id']} (${alert['ticker']} {alert['action']})")
+
+            for user_id in active_users:
+                # 4. Find alerts that haven't been decisioned yet for THIS user
+                conn = get_connection()
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        SELECT a.* FROM alerts a
+                        LEFT JOIN decisions d ON a.id = d.alert_id AND d.user_id = ?
+                        WHERE a.parse_status = 'success' AND d.id IS NULL
+                        ORDER BY a.timestamp ASC
+                    """, (user_id,))
+                    pending_alerts = cursor.fetchall()
+                finally:
+                    conn.close()
                 
-                # Fetch live quote for the decision engine
-                quote = get_live_quote(alert['ticker'], alert['expiry'], alert['strike'], alert['option_type'])
-                live_ask = quote['ask']
-                
-                # 5. Compute decision based on price tolerance and risk limits
-                action, reasoning = compute_decision(
-                    alert['id'], 
-                    alert['ticker'], 
-                    alert['expiry'], 
-                    alert['strike'], 
-                    alert['option_type'],
-                    alert['price'], 
-                    live_ask
-                )
-                
-                # Log decision
-                decision_id = log_decision(alert['id'], alert['price'], live_ask, action, reasoning)
-                
-                # 6. Execute if within tolerance and limits
-                if action in ("market_buy", "limit_buy"):
-                    execute_trade(
-                        decision_id=decision_id,
-                        alert_id=alert['id'],
-                        ticker=alert['ticker'], 
-                        expiry=alert['expiry'], 
-                        strike=alert['strike'], 
-                        option_type=alert['option_type'], 
-                        signal_action=alert['action'],
-                        decision_action=action,
-                        recommended_price=alert['price']
+                for alert in pending_alerts:
+                    print(f"Processing decision for User {user_id}, Alert ID {alert['id']} (${alert['ticker']} {alert['action']})")
+                    
+                    # Fetch live quote for the decision engine
+                    quote = get_live_quote(alert['ticker'], alert['expiry'], alert['strike'], alert['option_type'])
+                    live_ask = quote['ask']
+                    
+                    # 5. Compute decision based on price tolerance and risk limits
+                    action, reasoning = compute_decision(
+                        user_id,
+                        alert['id'], 
+                        alert['ticker'], 
+                        alert['expiry'], 
+                        alert['strike'], 
+                        alert['option_type'],
+                        alert['price'], 
+                        live_ask
                     )
+                    
+                    # Log decision
+                    decision_id = log_decision(user_id, alert['id'], alert['price'], live_ask, action, reasoning)
+                    
+                    # 6. Execute if within tolerance and limits
+                    if action in ("market_buy", "limit_buy"):
+                        execute_trade(
+                            user_id=user_id,
+                            decision_id=decision_id,
+                            alert_id=alert['id'],
+                            ticker=alert['ticker'], 
+                            expiry=alert['expiry'], 
+                            strike=alert['strike'], 
+                            option_type=alert['option_type'], 
+                            signal_action=alert['action'],
+                            decision_action=action,
+                            recommended_price=alert['price']
+                        )
             
         except SystemExit:
             raise  # Allow kill switch sys.exit(1) to propagate

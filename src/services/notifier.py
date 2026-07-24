@@ -1,35 +1,46 @@
 import requests
-from src.core.config import config
-from src.core.db import log_system_event
+import subprocess
+from src.core.config import get_user_config, system_config
+from src.core.db import log_system_event, get_connection
 
-def send_discord_message(event_type: str, message: str):
+def get_active_user_ids():
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM users WHERE is_active = 1")
+        return [row['id'] for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+def send_discord_message(user_id: int, event_type: str, message: str):
     """
     Sends a message to the Discord webhook if the event_type is enabled in config.
+    Discord webhook is system-wide, but we check user's events_enabled.
     """
-    if not config.discord_webhook_url:
+    if not system_config.discord_webhook_url:
         return # Webhook not configured
     
+    config = get_user_config(user_id)
     enabled_events = config.notifications.get('events_enabled', [])
     if event_type not in enabled_events:
         return # Event type not enabled for notification
         
     payload = {
-        "content": message
+        "content": f"[User {user_id}] {message}"
     }
     
     try:
-        response = requests.post(config.discord_webhook_url, json=payload)
+        response = requests.post(system_config.discord_webhook_url, json=payload)
         response.raise_for_status()
     except Exception as e:
-        print(f"Failed to send Discord notification: {e}")
+        print(f"Failed to send Discord notification for User {user_id}: {e}")
 
-def send_whatsapp_message(event_type: str, message: str):
+def send_whatsapp_message(user_id: int, event_type: str, message: str):
     """
     Sends a message via the local Hermes WhatsApp bridge using the 'hermes send' CLI
-    to all configured whatsapp_trade_targets.
+    to all configured whatsapp_trade_targets for this user.
     """
-    import subprocess
-    
+    config = get_user_config(user_id)
     enabled_events = config.notifications.get('events_enabled', [])
     if event_type not in enabled_events:
         return # Event type not enabled for notification
@@ -39,76 +50,90 @@ def send_whatsapp_message(event_type: str, message: str):
         try:
             subprocess.run(["hermes", "send", "--to", target, message], check=True, capture_output=True)
         except Exception as e:
-            print(f"Failed to send WhatsApp notification to {target}: {e}")
+            print(f"Failed to send WhatsApp notification to {target} (User {user_id}): {e}")
 
 def forward_raw_tweet(raw_text: str):
     """
-    Forwards the exact raw tweet text to all configured whatsapp_forward_targets.
+    Forwards the exact raw tweet text to all configured whatsapp_forward_targets for ALL active users.
     """
-    import subprocess
-    
-    targets = config.notifications.get('whatsapp_forward_targets', ["whatsapp"])
-    for target in targets:
-        try:
-            subprocess.run(["hermes", "send", "--to", target, raw_text], check=True, capture_output=True)
-        except Exception as e:
-            print(f"Failed to forward raw tweet to {target}: {e}")
+    for user_id in get_active_user_ids():
+        config = get_user_config(user_id)
+        targets = config.notifications.get('whatsapp_forward_targets', ["whatsapp"])
+        for target in targets:
+            try:
+                subprocess.run(["hermes", "send", "--to", target, raw_text], check=True, capture_output=True)
+            except Exception as e:
+                print(f"Failed to forward raw tweet to {target} (User {user_id}): {e}")
 
-# Convenience functions for specific event types
-def notify_alert(action, ticker, expiry, strike, option_type, price, style):
+def notify_alert(ticker: str, expiry: str, strike: float, option_type: str, price: float, style: str, action: str = "BTO"):
+    """Global alert, notifies all active users if enabled."""
     style_str = f" ({style})" if style else ""
     msg = f"ALERT — {action} ${ticker} {expiry} {strike}{option_type} @ {price:.2f}{style_str}"
-    send_discord_message("alert", msg)
-    send_whatsapp_message("alert", msg)
+    for user_id in get_active_user_ids():
+        send_discord_message(user_id, "alert", msg)
+        send_whatsapp_message(user_id, "alert", msg)
 
 def notify_add(ticker, expiry, strike, option_type, price):
+    """Global alert for ADD signal."""
     msg = f"ADD — ${ticker} {expiry} {strike}{option_type} AVG {price:.2f}"
-    send_discord_message("add", msg)
-    send_whatsapp_message("add", msg)
+    for user_id in get_active_user_ids():
+        send_discord_message(user_id, "add", msg)
+        send_whatsapp_message(user_id, "add", msg)
 
 def notify_review_needed(reason):
+    """Global alert for parse failures."""
     msg = f"REVIEW NEEDED — couldn't confidently parse tweet: \"{reason}\""
-    send_discord_message("review", msg)
-    send_whatsapp_message("review", msg)
+    for user_id in get_active_user_ids():
+        send_discord_message(user_id, "review", msg)
+        send_whatsapp_message(user_id, "review", msg)
 
-def notify_executed_live(quantity, ticker, strike, option_type, price):
+# User-specific convenience functions
+def notify_executed_live(user_id: int, quantity, ticker, strike, option_type, price):
     msg = f"EXECUTED — {quantity}x ${ticker} {strike}{option_type} @ {price:.2f} (paper: false)"
-    send_discord_message("executed", msg)
-    send_whatsapp_message("executed", msg)
+    send_discord_message(user_id, "executed", msg)
+    send_whatsapp_message(user_id, "executed", msg)
 
-def notify_executed_paper(quantity, ticker, strike, option_type, price):
+def notify_executed_paper(user_id: int, quantity, ticker, strike, option_type, price):
     msg = f"PAPER TRADE — {quantity}x ${ticker} {strike}{option_type} @ {price:.2f}"
-    send_discord_message("paper", msg)
-    send_whatsapp_message("paper", msg)
+    send_discord_message(user_id, "paper", msg)
+    send_whatsapp_message(user_id, "paper", msg)
 
-def notify_limit_sell_placed(quantity, ticker, strike, option_type, price, pct):
+def notify_limit_sell_placed(user_id: int, quantity, ticker, strike, option_type, price, pct):
     msg = f"LIMIT SELL PLACED — {quantity}x ${ticker} {strike}{option_type} @ {price:.2f} ({pct}% target)"
-    send_discord_message("limit_sell_placed", msg)
-    send_whatsapp_message("limit_sell_placed", msg)
+    send_discord_message(user_id, "limit_sell_placed", msg)
+    send_whatsapp_message(user_id, "limit_sell_placed", msg)
 
-def notify_limit_buy_placed(quantity, ticker, strike, option_type, price, pct):
+def notify_limit_buy_placed(user_id: int, quantity, ticker, strike, option_type, price, pct):
     msg = f"LIMIT BUY PLACED — {quantity}x ${ticker} {strike}{option_type} @ {price:.2f} ({pct}% discount)"
-    send_discord_message("limit_buy_placed", msg)
-    send_whatsapp_message("limit_buy_placed", msg)
+    send_discord_message(user_id, "limit_buy_placed", msg)
+    send_whatsapp_message(user_id, "limit_buy_placed", msg)
 
-def notify_limit_sell_filled(quantity, ticker, strike, option_type, price, pnl_dollars, pnl_pct):
+def notify_limit_sell_filled(user_id: int, quantity, ticker, strike, option_type, price, pnl_dollars, pnl_pct):
     msg = f"SOLD — {quantity}x ${ticker} {strike}{option_type} @ {price:.2f} — P/L: ${pnl_dollars:.2f} (+{pnl_pct:.2f}%)"
-    send_discord_message("limit_sell_filled", msg)
-    send_whatsapp_message("limit_sell_filled", msg)
+    send_discord_message(user_id, "limit_sell_filled", msg)
+    send_whatsapp_message(user_id, "limit_sell_filled", msg)
 
-def notify_skipped(ask, recommended, tolerance):
+def notify_skipped(user_id: int, ask, recommended, tolerance):
     msg = f"SKIPPED — ask {ask:.2f} exceeds {recommended:.2f} +{tolerance}% tolerance"
-    send_discord_message("skipped", msg)
-    send_whatsapp_message("skipped", msg)
+    send_discord_message(user_id, "skipped", msg)
+    send_whatsapp_message(user_id, "skipped", msg)
 
 def notify_kill_switch():
+    """Global kill switch notification."""
     msg = "KILL SWITCH ACTIVE — all trading halted"
-    send_discord_message("kill_switch", msg)
-    send_whatsapp_message("kill_switch", msg)
+    for user_id in get_active_user_ids():
+        send_discord_message(user_id, "kill_switch", msg)
+        send_whatsapp_message(user_id, "kill_switch", msg)
     log_system_event('kill_switch', msg)
 
-def notify_error(component, error_msg):
+def notify_error(component, error_msg, user_id=None):
     msg = f"ERROR — [{component}] — [{error_msg}]"
-    send_discord_message("error", msg)
-    send_whatsapp_message("error", msg)
-    log_system_event('error', msg)
+    if user_id:
+        send_discord_message(user_id, "error", msg)
+        send_whatsapp_message(user_id, "error", msg)
+    else:
+        for uid in get_active_user_ids():
+            send_discord_message(uid, "error", msg)
+            send_whatsapp_message(uid, "error", msg)
+    log_system_event('error', msg, user_id=user_id)
+

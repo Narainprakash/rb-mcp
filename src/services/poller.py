@@ -5,7 +5,7 @@ import pytz
 import tweepy
 import exchange_calendars as xcals
 
-from src.core.config import config
+from src.core.config import system_config
 from src.core.security import check_kill_switch
 from src.core.db import get_connection
 from src.core.time_utils import NY_TZ, get_ny_time, is_market_open_today, get_current_polling_interval
@@ -48,7 +48,7 @@ def check_quota_guardrail():
     finally:
         conn.close()
     
-    limit = config.polling.get("monthly_api_call_ceiling", 10000)
+    limit = system_config.polling.get("monthly_api_call_ceiling", 10000)
     if count >= limit * 0.95:
         notify_error("Poller", f"CRITICAL: Approaching Twitter API monthly quota ({count}/{limit})")
     
@@ -59,20 +59,20 @@ def start_poller():
     from src.core.db import log_system_event
     log_system_event('startup', 'Hermes Poller started')
     
-    if not config.twitter_api_key or not config.twitter_access_token:
+    if not system_config.twitter_api_key or not system_config.twitter_access_token:
         print("ERROR: TWITTER_API_KEY or TWITTER_ACCESS_TOKEN not found in .env. Required for private accounts.")
         return
         
     client = tweepy.Client(
-        bearer_token=config.twitter_bearer_token,
-        consumer_key=config.twitter_api_key,
-        consumer_secret=config.twitter_api_secret,
-        access_token=config.twitter_access_token,
-        access_token_secret=config.twitter_access_token_secret
+        bearer_token=system_config.twitter_bearer_token,
+        consumer_key=system_config.twitter_api_key,
+        consumer_secret=system_config.twitter_api_secret,
+        access_token=system_config.twitter_access_token,
+        access_token_secret=system_config.twitter_access_token_secret
     )
     
     # 1. Get Target User ID
-    target_account = config.polling.get("target_account", "kttechprivate")
+    target_account = system_config.polling.get("target_account", "kttechprivate")
     target_user_id = None
     while not target_user_id:
         try:

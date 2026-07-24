@@ -1,7 +1,7 @@
 import time
 from datetime import datetime, timedelta
 import pytz
-from src.core.config import config
+from src.core.config import get_user_config
 from src.core.db import get_connection, log_system_event
 from src.core.time_utils import NY_TZ
 from src.services.executor import get_live_quote
@@ -9,14 +9,10 @@ from src.services.notifier import notify_limit_sell_filled
 
 def process_open_orders():
     """
-    Monitors open limit sell and limit buy orders.
+    Monitors open limit sell and limit buy orders across all users.
     In paper mode, simulates fills by checking if the market bid/ask reaches target_price.
-    Handles the 15:50 ET 0DTE market sell cutoff for sells, and cancels for buys.
+    Handles the user-specific 0DTE market sell cutoff for sells, and cancels for buys.
     """
-    paper_mode = config.execution.get('paper_mode', True)
-    cutoff_time_str = config.execution.get('zero_dte_market_sell_cutoff', '15:50')
-    cutoff_time = datetime.strptime(cutoff_time_str, "%H:%M").time()
-    
     now = datetime.now(NY_TZ)
     current_time = now.time()
     today_str = now.strftime("%Y-%m-%d")
@@ -29,7 +25,7 @@ def process_open_orders():
         # 1. PROCESS LIMIT SELL ORDERS
         # ---------------------------------------------------------
         cursor.execute("""
-            SELECT l.id as limit_id, l.target_price, l.sell_order_id,
+            SELECT l.id as limit_id, l.target_price, l.sell_order_id, l.user_id,
                    p.id as position_id, p.ticker, p.expiry, p.strike, p.option_type, p.total_quantity, p.average_cost
             FROM limit_orders l
             JOIN positions p ON l.position_id = p.id
@@ -38,6 +34,12 @@ def process_open_orders():
         sell_orders = cursor.fetchall()
         
         for order in sell_orders:
+            user_id = order['user_id']
+            config = get_user_config(user_id)
+            paper_mode = config.execution.get('paper_mode', True)
+            cutoff_time_str = config.execution.get('zero_dte_market_sell_cutoff', '15:50')
+            cutoff_time = datetime.strptime(cutoff_time_str, "%H:%M").time()
+            
             is_0dte = (order['expiry'] == today_str)
             
             # Check 0DTE Cutoff rule
@@ -57,7 +59,7 @@ def process_open_orders():
                 
                 cursor.execute("UPDATE positions SET status = 'closed' WHERE id = ?", (order['position_id'],))
                 
-                notify_limit_sell_filled(order['total_quantity'], order['ticker'], order['strike'], 
+                notify_limit_sell_filled(user_id, order['total_quantity'], order['ticker'], order['strike'], 
                                          order['option_type'], fill_price, pnl_dollars, pnl_pct)
                 continue
                 
@@ -77,7 +79,7 @@ def process_open_orders():
                     
                     cursor.execute("UPDATE positions SET status = 'closed' WHERE id = ?", (order['position_id'],))
                     
-                    notify_limit_sell_filled(order['total_quantity'], order['ticker'], order['strike'], 
+                    notify_limit_sell_filled(user_id, order['total_quantity'], order['ticker'], order['strike'], 
                                              order['option_type'], order['target_price'], pnl_dollars, pnl_pct)
             else:
                 # Live Mode: Poll Robinhood MCP for order status
@@ -88,7 +90,7 @@ def process_open_orders():
         # ---------------------------------------------------------
         cursor.execute("""
             SELECT b.id as buy_id, b.decision_id, b.buy_order_id, b.target_price, b.quantity,
-                   b.created_at,
+                   b.created_at, b.user_id,
                    a.ticker, a.expiry, a.strike, a.option_type, a.action as signal_action
             FROM limit_buy_orders b
             JOIN alerts a ON b.alert_id = a.id
@@ -97,12 +99,18 @@ def process_open_orders():
         buy_orders = cursor.fetchall()
 
         for order in buy_orders:
+            user_id = order['user_id']
+            config = get_user_config(user_id)
+            paper_mode = config.execution.get('paper_mode', True)
+            cutoff_time_str = config.execution.get('zero_dte_market_sell_cutoff', '15:50')
+            cutoff_time = datetime.strptime(cutoff_time_str, "%H:%M").time()
+            
             is_0dte = (order['expiry'] == today_str)
 
             # Check 0DTE Cutoff rule - cancel buys at end of day
             if is_0dte and current_time >= cutoff_time:
                 cursor.execute("UPDATE limit_buy_orders SET status = 'cancelled' WHERE id = ?", (order['buy_id'],))
-                log_system_event('system', f"Cancelled stale 0DTE limit buy order #{order['buy_id']} for {order['ticker']}")
+                log_system_event('system', f"Cancelled stale 0DTE limit buy order #{order['buy_id']} for {order['ticker']}", user_id=user_id)
                 continue
 
             # Cancel stale non-0DTE limit buy orders older than 24 hours
@@ -112,7 +120,7 @@ def process_open_orders():
                 age_hours = (datetime.now() - created_dt).total_seconds() / 3600
                 if age_hours > 24:
                     cursor.execute("UPDATE limit_buy_orders SET status = 'cancelled' WHERE id = ?", (order['buy_id'],))
-                    log_system_event('system', f"Cancelled stale limit buy order #{order['buy_id']} for {order['ticker']} (age: {age_hours:.1f}h)")
+                    log_system_event('system', f"Cancelled stale limit buy order #{order['buy_id']} for {order['ticker']} (age: {age_hours:.1f}h)", user_id=user_id)
                     continue
 
             if paper_mode:
@@ -127,6 +135,7 @@ def process_open_orders():
                     
                     # Execute the position update / take-profit logic
                     process_buy_fill(
+                        user_id=user_id,
                         decision_id=order['decision_id'],
                         ticker=order['ticker'],
                         expiry=order['expiry'],
