@@ -1,7 +1,6 @@
 import math
 from src.core.config import get_user_config
 from src.core.db import get_connection
-from src.services.notifier import notify_skipped
 from src.core.time_utils import get_today_ny_bounds
 
 def check_daily_spend_limit(user_id: int, requested_spend: float) -> bool:
@@ -93,31 +92,32 @@ def compute_decision(user_id: int, alert_id: int, ticker: str, expiry: str, stri
     estimated_spend = live_ask * contracts * 100
     per_trade_max = config.decision.get('per_trade_max_spend_usd', 500)
     
+    # Callers notify on every "skip" - see trade_loop. Reasons are formatted to
+    # 2dp because they are surfaced verbatim in notifications and the dashboard.
     if estimated_spend > per_trade_max:
-        reason = f"estimated spend ${estimated_spend} exceeds per_trade limit ${per_trade_max}"
+        reason = f"estimated spend ${estimated_spend:.2f} exceeds per_trade limit ${per_trade_max:.2f}"
         return "skip", reason
-        
+
     if not check_daily_spend_limit(user_id, estimated_spend):
-        reason = f"estimated spend ${estimated_spend} would exceed daily max"
+        reason = f"estimated spend ${estimated_spend:.2f} would exceed daily max"
         return "skip", reason
-        
+
     if not check_position_spend_limit(user_id, ticker, expiry, strike, option_type, estimated_spend):
-        reason = f"estimated spend ${estimated_spend} would exceed max spend per position"
+        reason = f"estimated spend ${estimated_spend:.2f} would exceed max spend per position"
         return "skip", reason
-        
+
     if not check_open_positions_limit(user_id):
         reason = "maximum open positions limit reached"
         return "skip", reason
 
     if live_ask < recommended_price:
-        reason = f"ask {live_ask} is below recommended {recommended_price}. Will place discount limit buy."
+        reason = f"ask {live_ask:.2f} is below recommended {recommended_price:.2f}. Will place discount limit buy."
         return "limit_buy", reason
     elif live_ask <= max_price:
-        reason = f"ask {live_ask} is within tolerance of {max_price} (rec {recommended_price})"
+        reason = f"ask {live_ask:.2f} is within tolerance of {max_price:.2f} (rec {recommended_price:.2f})"
         return "market_buy", reason
     else:
-        reason = f"ask {live_ask} exceeds {max_price} (+{tolerance_pct}% tolerance)"
-        notify_skipped(user_id, live_ask, recommended_price, tolerance_pct)
+        reason = f"ask {live_ask:.2f} exceeds {max_price:.2f} (+{tolerance_pct}% tolerance)"
         return "skip", reason
 
 def log_decision(user_id: int, alert_id: int, recommended_price: float, observed_price: float, action_taken: str, reasoning: str):

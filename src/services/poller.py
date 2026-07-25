@@ -77,7 +77,8 @@ def start_poller():
         consumer_key=system_config.twitter_api_key,
         consumer_secret=system_config.twitter_api_secret,
         access_token=system_config.twitter_access_token,
-        access_token_secret=system_config.twitter_access_token_secret
+        access_token_secret=system_config.twitter_access_token_secret,
+        wait_on_rate_limit=True
     )
     
     # 1. Get Target User ID
@@ -86,9 +87,9 @@ def start_poller():
     target_user_id = None
     while not target_user_id:
         try:
+            log_api_call('x', 'get_user')
             user = client.get_user(username=target_account)
             target_user_id = user.data.id
-            log_api_call('x', 'get_user')
             print(f"Target User {target_account} ID: {target_user_id}")
         except Exception as e:
             print(f"Failed to get user ID for {target_account}: {e}. Retrying in 60s...")
@@ -122,7 +123,10 @@ def start_poller():
             since_id = get_last_since_id()
             
             try:
-                # Poll Twitter
+                # Logged before the request: a failed or rate-limited call still
+                # consumes quota, so logging only on success undercounts usage
+                # and lets the guardrail sail past the real ceiling.
+                log_api_call('x', 'get_users_tweets')
                 response = client.get_users_tweets(
                     id=target_user_id,
                     since_id=since_id,
@@ -130,7 +134,6 @@ def start_poller():
                     tweet_fields=["created_at", "referenced_tweets"],
                     user_auth=True
                 )
-                log_api_call('x', 'get_users_tweets')
                 
                 if response.errors:
                     error_msg = str(response.errors)

@@ -16,6 +16,17 @@ from src.services.notifier import (
 # successes cannot reset another user's failure streak.
 _consecutive_errors = {}
 
+def run_notifications(notifications):
+    """Fires deferred notifications. Always call this *after* committing - these
+    do network I/O, and running them inside a transaction holds the write lock
+    for the duration of an HTTP request or subprocess."""
+    for notify in notifications:
+        try:
+            notify()
+        except Exception as e:
+            print(f"Notification failed: {e}")
+
+
 def get_user_robinhood_account_id(user_id: int):
     """Returns the per-user Robinhood agentic account id, or None if unset."""
     conn = get_connection()
@@ -55,28 +66,37 @@ def get_live_quote(ticker, expiry, strike, option_type, reference_price):
     spread = max(0.01, round(mid * 0.02, 2))
     return {"bid": round(mid - spread / 2, 2), "ask": round(mid + spread / 2, 2)}
 
-def process_buy_fill(user_id: int, decision_id: int, ticker: str, expiry: str, strike: float, option_type: str, signal_action: str, fill_price: float, contracts: int, paper_mode: bool, order_id: str):
+def process_buy_fill(user_id: int, decision_id: int, ticker: str, expiry: str, strike: float, option_type: str, signal_action: str, fill_price: float, contracts: int, paper_mode: bool, order_id: str, conn=None):
     """
     Handles the post-fill logic for a buy order scoped to a specific user.
     Used by both immediate market buys and when a limit buy fills.
-    It logs the trade to the specific user_id, updates their independent position ledger, 
+    It logs the trade to the specific user_id, updates their independent position ledger,
     and places a take-profit limit sell scoped to that user.
+
+    Pass `conn` to join the caller's transaction - the monitor does this so the
+    fill and the 'filled' stamp on the limit buy order commit atomically, and so
+    a second connection never blocks on the caller's open write lock.
+
+    Returns a list of zero-argument callables to invoke *after* the transaction
+    commits. Notifications do network I/O and must not run inside it.
     """
     config = get_user_config(user_id)
-    conn = get_connection()
+    owns_conn = conn is None
+    if owns_conn:
+        conn = get_connection()
+    notifications = []
     try:
         cursor = conn.cursor()
-        
+
         # 1. Log Trade
         cursor.execute("""
             INSERT INTO trades (user_id, decision_id, paper_mode, buy_order_id, fill_price, quantity, status)
             VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (user_id, decision_id, paper_mode, order_id, fill_price, contracts, 'open'))
-        
-        if paper_mode:
-            notify_executed_paper(user_id, contracts, ticker, strike, option_type, fill_price)
-        else:
-            notify_executed_live(user_id, contracts, ticker, strike, option_type, fill_price)
+        trade_id = cursor.lastrowid
+
+        notify_fill = notify_executed_paper if paper_mode else notify_executed_live
+        notifications.append(lambda: notify_fill(user_id, contracts, ticker, strike, option_type, fill_price))
 
         # 2. Position Management
         cursor.execute("""
@@ -130,12 +150,25 @@ def process_buy_fill(user_id: int, decision_id: int, ticker: str, expiry: str, s
             INSERT INTO limit_orders (user_id, position_id, sell_order_id, target_price, status)
             VALUES (?, ?, ?, ?, 'pending')
         """, (user_id, position_id, sell_order_id, target_sell_price))
-        
-        conn.commit()
+
+        # Link the trade to its position so the lifecycle can close it later.
+        cursor.execute("UPDATE trades SET position_id = ? WHERE id = ?", (position_id, trade_id))
+
+        notifications.append(
+            lambda: notify_limit_sell_placed(user_id, new_quantity, ticker, strike, option_type, target_sell_price, take_profit_pct)
+        )
+
+        if owns_conn:
+            conn.commit()
     finally:
-        conn.close()
-    
-    notify_limit_sell_placed(user_id, new_quantity, ticker, strike, option_type, target_sell_price, take_profit_pct)
+        if owns_conn:
+            conn.close()
+
+    if owns_conn:
+        run_notifications(notifications)
+        return []
+    # Caller owns the transaction and fires these after it commits.
+    return notifications
 
 
 def execute_trade(user_id: int, decision_id: int, alert_id: int, ticker: str, expiry: str, strike: float, option_type: str, signal_action: str, decision_action: str, recommended_price: float):
@@ -171,7 +204,8 @@ def execute_trade(user_id: int, decision_id: int, alert_id: int, ticker: str, ex
             # In paper mode, we simulate checking the current ask:
             quote = get_live_quote(ticker, expiry, strike, option_type, recommended_price)
             if quote['ask'] <= max_price:
-                # Immediate fill
+                # Immediate fill. process_buy_fill owns its transaction here and
+                # fires its own notifications after committing.
                 fill_price = quote['ask']
                 process_buy_fill(user_id, decision_id, ticker, expiry, strike, option_type, signal_action, fill_price, contracts, paper_mode, order_id)
             else:

@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import secrets
 from flask import Flask, jsonify, render_template, request, redirect, url_for, flash
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
@@ -11,7 +12,7 @@ import json
 # Add project root to sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
-from src.core.db import get_connection
+from src.core.db import get_connection, log_system_event
 from src.core.config import get_user_config, system_config
 
 app = Flask(__name__)
@@ -58,6 +59,25 @@ def query_db(query, args=(), one=False):
     conn.close()
     return (rv[0] if rv else None) if one else rv
 
+# Login throttling. In-process and per-IP: enough to stop credential stuffing
+# from a compromised device on the tailnet, and it puts failed attempts in the
+# dashboard's own event feed where they are visible.
+LOGIN_MAX_ATTEMPTS = 5
+LOGIN_LOCKOUT_SEC = 300
+_failed_logins = {}
+
+def _is_locked_out(source_ip):
+    attempts = [t for t in _failed_logins.get(source_ip, []) if time.time() - t < LOGIN_LOCKOUT_SEC]
+    _failed_logins[source_ip] = attempts
+    return len(attempts) >= LOGIN_MAX_ATTEMPTS
+
+def _record_failed_login(source_ip, username):
+    _failed_logins.setdefault(source_ip, []).append(time.time())
+    attempts = len(_failed_logins[source_ip])
+    log_system_event('auth_failure', f"Failed login for '{username}' from {source_ip} (attempt {attempts})")
+    if attempts >= LOGIN_MAX_ATTEMPTS:
+        log_system_event('auth_lockout', f"Locked out {source_ip} after {attempts} failed logins")
+
 class User(UserMixin):
     def __init__(self, id, username, is_admin, active_status):
         self.id = str(id)
@@ -81,18 +101,25 @@ def login():
     if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password')
-        
+        source_ip = request.remote_addr or 'unknown'
+
+        if _is_locked_out(source_ip):
+            flash("Too many failed attempts. Try again in a few minutes.")
+            return render_template('login.html')
+
         user_data = query_db("SELECT * FROM users WHERE username = ?", (username,), one=True)
         if user_data and check_password_hash(user_data['password_hash'], password):
             if not user_data['is_active']:
                 flash("Account is inactive.")
                 return redirect(url_for('login'))
+            _failed_logins.pop(source_ip, None)
             user = User(user_data['id'], user_data['username'], user_data['is_admin'], user_data['is_active'])
             login_user(user)
             return redirect(url_for('index'))
         else:
+            _record_failed_login(source_ip, username)
             flash("Invalid username or password.")
-            
+
     return render_template('login.html')
 
 @app.route('/logout')

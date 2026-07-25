@@ -13,6 +13,8 @@ Hermes is a self-hosted agent that polls an X (Twitter) account for options trad
 - **Circuit Breaker**: Automatically engages the kill switch after N consecutive execution errors (default 3) to prevent runaway failures.
 - **Stale Order Cleanup**: Automatically cancels unfilled limit buy orders after 24 hours to prevent orphaned orders.
 - **Expiry Reconciliation**: Positions past their expiry are closed out as `expired` with the premium booked as a realized loss, so they can't silently occupy your `max_open_positions` slots forever.
+- **Skip Transparency**: Every skipped alert notifies you with the reason — including risk-limit skips, so you always know when the bot has stopped trading because it hit your daily spend or open-position cap.
+- **Login Protection**: The dashboard locks out an IP after 5 failed logins in 5 minutes and records every failed attempt to the system event feed.
 - **Daily Summary Push**: A configurable end-of-day report (P/L, Trades, Alerts, Open Positions, API Calls) sent via WhatsApp/Telegram to each user.
 
 ---

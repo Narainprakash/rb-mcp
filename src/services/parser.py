@@ -99,8 +99,11 @@ def parse_alert(tweet_text: str) -> ParsedSignal:
         if price_match:
             signal.price = float(price_match.group(1))
 
-    # 6. Validation
-    if all([signal.action, signal.ticker, signal.expiry, signal.strike, signal.option_type, signal.price is not None]):
+    # 6. Validation. Price must be positive - a zero or negative price is not a
+    # tradeable signal, and letting it through means the decision engine raises
+    # before a decision row is written, so the alert retries forever.
+    if all([signal.action, signal.ticker, signal.expiry, signal.strike, signal.option_type,
+            signal.price is not None and signal.price > 0]):
         signal.parse_status = "success"
         
     return signal

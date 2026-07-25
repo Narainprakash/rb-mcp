@@ -3,6 +3,10 @@ import subprocess
 from src.core.config import get_user_config, system_config
 from src.core.db import log_system_event, get_connection
 
+# Notifications must never block indefinitely: they are on the trade path, and a
+# hung webhook or `hermes` CLI would stall the loop that places and exits trades.
+NOTIFY_TIMEOUT_SEC = 10
+
 def get_active_user_ids():
     conn = get_connection()
     try:
@@ -32,7 +36,7 @@ def send_discord_message(user_id: int, event_type: str, message: str):
     }
 
     try:
-        response = requests.post(webhook_url, json=payload)
+        response = requests.post(webhook_url, json=payload, timeout=NOTIFY_TIMEOUT_SEC)
         response.raise_for_status()
     except Exception as e:
         print(f"Failed to send Discord notification for User {user_id}: {e}")
@@ -50,7 +54,7 @@ def send_whatsapp_message(user_id: int, event_type: str, message: str):
     targets = config.notifications.get('whatsapp_trade_targets', ["whatsapp"])
     for target in targets:
         try:
-            subprocess.run(["hermes", "send", "--to", target, message], check=True, capture_output=True)
+            subprocess.run(["hermes", "send", "--to", target, message], check=True, capture_output=True, timeout=NOTIFY_TIMEOUT_SEC)
         except Exception as e:
             print(f"Failed to send WhatsApp notification to {target} (User {user_id}): {e}")
 
@@ -63,7 +67,7 @@ def forward_raw_tweet(raw_text: str):
         targets = config.notifications.get('whatsapp_forward_targets', ["whatsapp"])
         for target in targets:
             try:
-                subprocess.run(["hermes", "send", "--to", target, raw_text], check=True, capture_output=True)
+                subprocess.run(["hermes", "send", "--to", target, raw_text], check=True, capture_output=True, timeout=NOTIFY_TIMEOUT_SEC)
             except Exception as e:
                 print(f"Failed to forward raw tweet to {target} (User {user_id}): {e}")
 
@@ -111,12 +115,15 @@ def notify_limit_buy_placed(user_id: int, quantity, ticker, strike, option_type,
     send_whatsapp_message(user_id, "limit_buy_placed", msg)
 
 def notify_limit_sell_filled(user_id: int, quantity, ticker, strike, option_type, price, pnl_dollars, pnl_pct):
-    msg = f"SOLD — {quantity}x ${ticker} {strike}{option_type} @ {price:.2f} — P/L: ${pnl_dollars:.2f} (+{pnl_pct:.2f}%)"
+    sign = "+" if pnl_dollars >= 0 else "-"
+    msg = f"SOLD — {quantity}x ${ticker} {strike}{option_type} @ {price:.2f} — P/L: {sign}${abs(pnl_dollars):.2f} ({pnl_pct:+.2f}%)"
     send_discord_message(user_id, "limit_sell_filled", msg)
     send_whatsapp_message(user_id, "limit_sell_filled", msg)
 
-def notify_skipped(user_id: int, ask, recommended, tolerance):
-    msg = f"SKIPPED — ask {ask:.2f} exceeds {recommended:.2f} +{tolerance}% tolerance"
+def notify_skipped(user_id: int, reason: str):
+    """Fired for every skip - price tolerance and risk-limit alike. A silently
+    skipped alert is indistinguishable from no alert at all."""
+    msg = f"SKIPPED — {reason}"
     send_discord_message(user_id, "skipped", msg)
     send_whatsapp_message(user_id, "skipped", msg)
 

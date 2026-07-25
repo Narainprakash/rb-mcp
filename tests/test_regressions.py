@@ -15,6 +15,9 @@ from src.services.parser import parse_alert
 def db(tmp_path):
     conn = sqlite3.connect(tmp_path / "test.db")
     conn.row_factory = sqlite3.Row
+    # Match get_connection(): under WAL a reader can proceed while another
+    # connection holds a write lock, which the buy-fill path relies on.
+    conn.execute("PRAGMA journal_mode=WAL;")
     conn.executescript(SCHEMA)
     yield conn
     conn.close()
@@ -48,6 +51,24 @@ def test_non_alert_tweet_is_ignored_not_review():
 def test_malformed_calendar_date_does_not_crash():
     signal = parse_alert("#ALERT\nBTO $SPY 13/45 750C\n1.81")
     assert signal.parse_status == "needs_review"
+
+
+def test_non_positive_price_is_rejected():
+    """A zero price would raise in the quote call before a decision row exists,
+    leaving the alert to retry every 2s forever."""
+    assert parse_alert("#ALERT\nBTO $SPY 8/21 750C\n0\nSWING").parse_status == "needs_review"
+
+
+# --- Notifications ----------------------------------------------------------
+
+def test_losing_exit_renders_a_negative_sign(monkeypatch):
+    import src.services.notifier as notifier
+    sent = []
+    monkeypatch.setattr(notifier, "send_discord_message", lambda uid, ev, m: sent.append(m))
+    monkeypatch.setattr(notifier, "send_whatsapp_message", lambda *a, **k: None)
+    notifier.notify_limit_sell_filled(1, 1, "SPY", 750, "C", 0.75, -25.00, -25.00)
+    assert "(+-" not in sent[0]
+    assert "-$25.00 (-25.00%)" in sent[0]
 
 
 # --- Executor: simulated quotes ---------------------------------------------
@@ -117,6 +138,40 @@ def test_todays_alert_is_still_picked_up(db):
 def test_positions_table_has_add_without_parent(db):
     columns = {r["name"] for r in db.execute("PRAGMA table_info(positions)").fetchall()}
     assert "add_without_parent" in columns
+
+
+def test_buy_fill_joins_the_callers_transaction(db, monkeypatch, tmp_path):
+    """process_buy_fill must reuse the caller's connection. Opening its own while
+    the caller holds a write lock blocks under WAL and then throws."""
+    import src.core.db as core_db
+    import src.services.executor as executor
+
+    monkeypatch.setattr(core_db, "DB_PATH", str(tmp_path / "test.db"))
+    db.execute("INSERT INTO users (username, password_hash) VALUES ('alice', 'h')")
+    db.execute(
+        "INSERT INTO user_configs (user_id, config_json) VALUES (1, '{\"execution\": {\"paper_mode\": true}}')"
+    )
+    db.commit()
+
+    # Hold an open write transaction on the caller's connection, exactly as
+    # process_open_orders does after reconciling an expired position.
+    db.execute("UPDATE users SET is_active = 1 WHERE id = 1")
+
+    notifications = executor.process_buy_fill(
+        user_id=1, decision_id=1, ticker="SPY", expiry="2030-12-20", strike=750,
+        option_type="C", signal_action="BTO", fill_price=1.00, contracts=1,
+        paper_mode=True, order_id="b1", conn=db,
+    )
+    db.commit()
+
+    assert db.execute("SELECT COUNT(*) c FROM positions").fetchone()["c"] == 1
+    # Notifications are deferred, not fired inside the transaction.
+    assert len(notifications) == 2
+
+
+def test_trade_is_linked_to_its_position(db):
+    columns = {r["name"] for r in db.execute("PRAGMA table_info(trades)").fetchall()}
+    assert "position_id" in columns
 
 
 def test_expired_positions_are_selected_for_reconciliation(db):

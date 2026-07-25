@@ -59,9 +59,11 @@ CREATE TABLE IF NOT EXISTS trades (
     fill_price REAL,
     quantity INTEGER,
     status TEXT NOT NULL, -- 'open', 'closed', 'expired'
+    position_id INTEGER, -- set on fill, so the trade can be closed with its position
     timestamp DATETIME DEFAULT (datetime('now', 'localtime')),
     FOREIGN KEY(user_id) REFERENCES users(id),
-    FOREIGN KEY(decision_id) REFERENCES decisions(id)
+    FOREIGN KEY(decision_id) REFERENCES decisions(id),
+    FOREIGN KEY(position_id) REFERENCES positions(id)
 );
 
 CREATE TABLE IF NOT EXISTS positions (
@@ -127,6 +129,9 @@ CREATE TABLE IF NOT EXISTS system_events (
 
 -- Performance Indexes
 CREATE INDEX IF NOT EXISTS idx_alerts_parse_status ON alerts(parse_status);
+-- Covers the trade loop's pending-alert query, which runs every 2s per user.
+CREATE INDEX IF NOT EXISTS idx_alerts_status_time ON alerts(parse_status, timestamp);
+CREATE INDEX IF NOT EXISTS idx_trades_position ON trades(position_id);
 CREATE INDEX IF NOT EXISTS idx_limit_orders_status ON limit_orders(status);
 CREATE INDEX IF NOT EXISTS idx_limit_buy_orders_status ON limit_buy_orders(status);
 CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status);
@@ -151,6 +156,11 @@ def init_db():
     position_columns = {row['name'] for row in cursor.fetchall()}
     if 'add_without_parent' not in position_columns:
         cursor.execute("ALTER TABLE positions ADD COLUMN add_without_parent BOOLEAN DEFAULT 0")
+
+    cursor.execute("PRAGMA table_info(trades)")
+    trade_columns = {row['name'] for row in cursor.fetchall()}
+    if 'position_id' not in trade_columns:
+        cursor.execute("ALTER TABLE trades ADD COLUMN position_id INTEGER")
 
     conn.commit()
     conn.close()

@@ -17,7 +17,7 @@ def trade_loop():
     """
     print("Starting Hermes Trade & Execution Loop...")
     from src.core.db import log_system_event
-    from src.services.notifier import notify_error
+    from src.services.notifier import notify_error, notify_skipped
     log_system_event('startup', 'Hermes Trade & Execution Loop started')
 
     from src.core.config import system_config
@@ -93,6 +93,11 @@ def trade_loop():
                     
                     # Log decision
                     decision_id = log_decision(user_id, alert['id'], alert['price'], live_ask, action, reasoning)
+
+                    # Notify on every skip, not just price-tolerance ones: a
+                    # silently skipped alert looks identical to no alert at all.
+                    if action == "skip":
+                        notify_skipped(user_id, reasoning)
                     
                     # 6. Execute if within tolerance and limits
                     if action in ("market_buy", "limit_buy"):

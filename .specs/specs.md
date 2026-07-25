@@ -215,6 +215,8 @@ Configurable parameters (Section 8), not hardcoded:
 
 The Decision Engine must fetch a live quote (bid/ask) from Robinhood before comparing to `recommended_price` — do not trust a stale or cached price for this comparison, since the whole rule is price-sensitive.
 
+**Every skip notifies**, not just price-tolerance ones. Hitting `max_daily_spend_usd` or `max_open_positions` stops trading for the rest of the session, and silence is indistinguishable from "no alerts today" — so the reason string is sent on all five skip paths.
+
 Every decision (buy / skip / needs-review) is logged with the reasoning fields (recommended price, observed price, tolerance band, resulting action) so the dashboard can show *why* a trade was or wasn't made — this is what you asked for as "profit/loss, which trades" transparency.
 
 ---
@@ -233,7 +235,13 @@ Every decision (buy / skip / needs-review) is logged with the reasoning fields (
 
 **Quote source — read this before trusting any paper-mode number.** `get_live_quote(ticker, expiry, strike, option_type, reference_price)` is a *simulator*, not market data. It derives a bid/ask deterministically from `reference_price` (the alert price on entry, the position's average cost on exit) plus a drift that is a pure function of the contract and the current minute. This makes paper runs reproducible and keeps quotes anchored to the contract actually being traded, but **simulated fills and simulated P/L carry no information about how the strategy would perform on real prices.** Paper mode currently validates the *plumbing* — parse → decide → position ledger → take-profit → exit — not the strategy. The 1–2 week paper-validation step in Section 10 only becomes meaningful once this function is backed by real MCP quotes.
 
-**Position expiry.** Options past their expiry can never fill their take-profit. The monitor reconciles them each pass: pending limit sells are cancelled, the position moves to `status = 'expired'`, and the full premium is logged as a realized loss. Without this, positions accumulate as `open` forever, permanently consuming `max_open_positions` and inflating capital-at-risk.
+**Transaction discipline.** `process_open_orders()` runs its whole pass in **one transaction on one connection**, and `process_buy_fill()` accepts that connection via its `conn` argument. This is not stylistic: SQLite in WAL mode permits a single writer, so a nested connection writing while the outer transaction is open blocks until the busy timeout and then raises `database is locked`, discarding the entire uncommitted pass. Two rules follow, and both must hold for any new code on this path:
+- **Never open a second connection inside an open transaction.** Write `system_events` rows on the caller's cursor, not via `log_system_event()`.
+- **Never do network I/O inside a transaction.** Notifications are collected as deferred callables and fired by `run_notifications()` *after* the commit. A hung webhook inside a transaction holds the write lock, which blocks the poller from recording alerts and wedges the system. All notification paths carry a timeout (`NOTIFY_TIMEOUT_SEC`).
+
+Committing the buy fill and the `filled` stamp on its limit buy order in the same transaction is also what makes the fill idempotent: a failure between two separate commits would leave the order `pending` with the position already created, and the next pass would buy it again.
+
+**Position expiry.** Options past their expiry can never fill their take-profit. The monitor reconciles them each pass: pending limit sells are cancelled, the position and its trades move to `status = 'expired'`, and the full premium is logged as a realized loss. `trades.position_id` links a trade to its position so both close together. Without this, positions accumulate as `open` forever, permanently consuming `max_open_positions` and inflating capital-at-risk.
 
 **Position identity.** A buy is matched to an existing open position by (user, ticker, expiry, strike, option_type) regardless of whether the signal was `BTO` or `ADD`, so a repeat `BTO` on a contract already held averages into it rather than creating a second, separately-managed position. An `ADD` that finds no open position is still opened as a new position but flagged `positions.add_without_parent = 1` for review, per Section 3.3.
 

@@ -1,18 +1,22 @@
 import time
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from src.core.config import get_user_config, system_config
 from src.core.db import get_connection, log_system_event
-from src.core.time_utils import NY_TZ, get_today_ny_bounds
+from src.core.time_utils import NY_TZ
+from src.services.notifier import NOTIFY_TIMEOUT_SEC
 
 def get_daily_metrics(user_id: int, date_str: str):
     """Fetches PnL, Trades, Alerts, Open Positions, API calls, and Win Rate for the given NY date string."""
     conn = get_connection()
     try:
         cursor = conn.cursor()
-        
-        start_utc, end_utc = get_today_ny_bounds()
+
+        # Honour date_str so a missed summary can be regenerated for a past day.
+        day = datetime.strptime(date_str, "%Y-%m-%d").date()
+        start_utc = f"{day} 00:00:00"
+        end_utc = f"{day + timedelta(days=1)} 00:00:00"
         
         # Monthly API Calls (Global, not per user)
         now_ny = datetime.now(NY_TZ)
@@ -60,7 +64,7 @@ def send_summary_notification(user_id: int, summary_text: str):
     targets = config.summary.get('targets', ["whatsapp"])
     for target in targets:
         try:
-            subprocess.run(["hermes", "send", "--to", target, summary_text], check=True, capture_output=True)
+            subprocess.run(["hermes", "send", "--to", target, summary_text], check=True, capture_output=True, timeout=NOTIFY_TIMEOUT_SEC)
             print(f"Daily summary sent to {target} for user {user_id}")
         except Exception as e:
             print(f"Failed to send daily summary to {target} for user {user_id}: {e}")
