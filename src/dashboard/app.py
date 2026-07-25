@@ -145,12 +145,19 @@ def robinhood_status(user_config, user_id):
     account_id_set = bool(account_row and account_row.get('robinhood_account_id'))
     registered = agent_mcp_registered()
 
+    # Two processes, two different levels of access. The Hermes Agent may hold a
+    # perfectly good OAuth session and answer "what are my positions?" while this
+    # trading process still cannot place an order - it is a separate process with
+    # no MCP client and no share of that session. Reporting a flat "not
+    # integrated" when the agent visibly works reads as a bug, so name the state.
     if meta['implemented'] and source == 'robinhood':
         status, label = 'active', 'Active'
     elif meta['implemented']:
         status, label = 'available', 'Available (not selected)'
+    elif registered:
+        status, label = 'agent_only', 'Agent only - no trade routing'
     else:
-        status, label = 'not_integrated', 'Not integrated'
+        status, label = 'not_configured', 'Not configured'
 
     calls_last_min, refused = broker_usage()
     budget = system_config.settings.get('execution', {}).get('broker_rate_limit_per_min', 60)
@@ -163,9 +170,15 @@ def robinhood_status(user_config, user_id):
     ]
     if refused:
         prerequisites.append(f"Refused (rate limit): {refused}")
-    if status == 'not_integrated':
-        detail = ("No MCP client in the trading process, so orders and quotes "
-                  "cannot be routed to Robinhood yet. " + " | ".join(prerequisites))
+    if status == 'agent_only':
+        detail = ("Your Hermes Agent can query Robinhood (positions, balances) - "
+                  "that part works. The trading process is separate and cannot place "
+                  "orders: it has no MCP client and does not share the agent's session. "
+                  + " | ".join(prerequisites))
+    elif status == 'not_configured':
+        detail = ("Robinhood is not set up. Register the MCP server with the Hermes "
+                  "Agent, then wire a provider for the trading process. "
+                  + " | ".join(prerequisites))
     else:
         detail = " | ".join(prerequisites)
 

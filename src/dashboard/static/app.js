@@ -231,7 +231,9 @@ async function fetchHealth() {
             const rhDetail = document.getElementById('rh-detail');
             if (rh.status === 'active') {
                 rhDot.className = 'dot green';
-            } else if (rh.status === 'available') {
+            } else if (rh.status === 'available' || rh.status === 'agent_only') {
+                // Partial, not broken: the agent talks to Robinhood even though
+                // the trading process cannot route orders yet.
                 rhDot.className = 'dot yellow';
             } else {
                 rhDot.className = 'dot red';

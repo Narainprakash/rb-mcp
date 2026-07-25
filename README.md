@@ -569,11 +569,19 @@ The project's own web dashboard (`rb-mcp-dash` systemd service) runs on port `84
 #### Robinhood MCP status card
 This reports whether the broker integration is genuinely usable, and deliberately **does not** go green just because `quote_source` is set to `robinhood` — a status light that lied about this would be worse than no light at all.
 
+**Important: "connected to your agent" and "able to trade" are different things.** Hermes runs as two processes:
+
+- The **Hermes Agent** holds the Robinhood OAuth session. This is what answers *"what are my positions?"* over Telegram/WhatsApp.
+- The **trading bot** (`rb-mcp`) runs the poller, decision engine, and executor. It is a separate process with no MCP client and no share of that session.
+
+So you can legitimately query Robinhood through the agent while the bot still cannot place a single order. The card reports on the *trading* process, because that is the one that moves money.
+
 | State | Meaning |
 |---|---|
-| 🔴 Not integrated | No MCP client exists in the trading process. Orders and quotes cannot reach Robinhood. **This is the current state.** |
-| 🟡 Available (not selected) | The provider is implemented but `execution.quote_source` points elsewhere |
-| 🟢 Active | Implemented and selected — quotes are coming from Robinhood |
+| 🔴 Not configured | Robinhood isn't set up at all — no MCP server registered with the agent |
+| 🟡 Agent only - no trade routing | Your agent can query Robinhood, but the trading process cannot place orders. **This is the current state for most setups**, and it is why flipping to live mode still trades nothing |
+| 🟡 Available (not selected) | A provider is implemented but `execution.quote_source` points elsewhere |
+| 🟢 Active | Implemented and selected — quotes and orders route to Robinhood |
 
 The card also shows the supporting prerequisites, so you can see what's still missing rather than just a red light: whether the Hermes Agent has an enabled `mcp_servers.robinhood` entry in `~/.hermes/config.yaml`, whether your user has a `robinhood_account_id`, which quote source is active, and **current API usage against the rate-limit budget**.
 
