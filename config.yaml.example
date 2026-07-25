@@ -66,6 +66,9 @@ notifications:
 dashboard:
   bind_address: "127.0.0.1"              # Local IP the read-only web dashboard runs on
   port: 8420                             # Port for the web dashboard
+  secret_key: ""                         # Flask session signing key. Generate with: python -c "import secrets; print(secrets.token_hex(32))"
+                                          # If left blank, falls back to the DASHBOARD_SECRET_KEY env var, then a random key
+                                          # (sessions won't persist across restarts until you set one of these).
 
 # ==========================================
 # Hermes Config: Telegram Gateway Settings

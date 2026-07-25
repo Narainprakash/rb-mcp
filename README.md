@@ -164,6 +164,11 @@ python -c "from werkzeug.security import generate_password_hash; print(generate_
 sqlite3 hermes_mt.db "INSERT INTO users (username, password_hash) VALUES ('admin', 'hash_from_above');"
 ```
 
+Also set a session signing key before going live, so login sessions don't reset every restart — set `dashboard.secret_key` in `config.yaml`, or `DASHBOARD_SECRET_KEY` in `.env`:
+```bash
+python -c "import secrets; print(secrets.token_hex(32))"
+```
+
 1. Create a systemd service for the dashboard:
    ```bash
    sudo nano /etc/systemd/system/rb-mcp-dash.service
@@ -363,6 +368,9 @@ You should see the `robinhood` MCP server listed and its status. You can also te
 > *"What's my Robinhood account balance?"*
 
 ### 4.4 Switch from Paper Mode to Live Mode
+
+> **⚠️ CURRENT LIMITATION**: `src/services/executor.py` does not yet call the Robinhood MCP tool — its `get_live_quote()` is still a local mock, and no order-placement call is wired in. If you set `paper_mode: false`, the Executor detects this, logs an error/notification, and automatically forces the trade back into paper mode as a fail-safe rather than pretending to place a real order. **No trades will actually execute live until this MCP wiring is implemented in the Executor.** The steps below describe the intended flow once that integration lands.
+
 Once you've verified the MCP connection is healthy:
 
 1. Edit your project's `config.yaml`:

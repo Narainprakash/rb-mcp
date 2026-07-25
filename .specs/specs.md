@@ -229,6 +229,8 @@ Every decision (buy / skip / needs-review) is logged with the reasoning fields (
 - **Limit sell monitoring**: During active polling windows, check the status of all open limit sell orders. When filled, log realized P/L and notify via Discord. **In paper mode**: the monitor must poll the live market bid price and simulate a fill when the bid crosses the `target_sell_price`.
 - Idempotency: each decision should carry a unique ID; the Executor must not double-submit if retried after a timeout.
 
+**Implementation status (as of 2026-07-24):** `src/services/executor.py` does not yet call the real Robinhood Agentic Trading MCP — `get_live_quote()` is a local mock that returns a randomized bid/ask, and no order-placement tool is wired in. Per the "fail loudly/safely into paper mode" requirement above, `execute_trade()` now detects `paper_mode: false` and forces the trade back to paper mode (logging a `system_events` entry and sending an `error` notification) rather than silently faking a live fill. **Setting `execution.paper_mode: false` currently has no live-trading effect** until real MCP wiring is added to the Executor. GTC-vs-Day order duration and exponential-backoff retry on limit-sell placement are also not yet implemented.
+
 ---
 
 ## 6. Component 5 — Discord Notifications
@@ -288,6 +290,7 @@ Config: webhook URL, per-event-type on/off toggles, and a rate limit (so a burst
   3. Add **Cloudflare Access** (zero-trust) as the auth layer — email OTP or SSO, no passwords to manage.
   4. Alternatively, if you don't have a domain: use HTTP Basic Auth over a WireGuard/Tailscale VPN.
 - Do **not** expose the dashboard port directly via VPS firewall rules — no open ports beyond SSH.
+- Flask must run with `debug: false` in every deployed environment — the interactive debugger is a remote-code-execution risk on any externally-reachable instance. Set a real `dashboard.secret_key` in `config.yaml` (or a `DASHBOARD_SECRET_KEY` env var); if left unset, the app now falls back to a random key generated at process start rather than a hardcoded default, meaning sessions won't survive a restart until you configure one.
 
 ---
 
