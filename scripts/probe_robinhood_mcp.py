@@ -52,6 +52,19 @@ def section(title):
     print(f"\n{'=' * 70}\n{title}\n{'=' * 70}")
 
 
+def _flatten_exception(error, depth=0):
+    """Yields the real causes inside an ExceptionGroup / __cause__ chain."""
+    if depth > 5:
+        return
+    for sub in getattr(error, "exceptions", []) or []:
+        yield sub
+        yield from _flatten_exception(sub, depth + 1)
+    cause = getattr(error, "__cause__", None) or getattr(error, "__context__", None)
+    if cause is not None and cause is not error:
+        yield cause
+        yield from _flatten_exception(cause, depth + 1)
+
+
 def _find_token(node, path=""):
     """Recursively locates an access token. Returns (key_path, value).
 
@@ -147,33 +160,129 @@ def find_agent_config():
 
 
 def find_cached_credentials():
-    section("2. Cached OAuth credentials")
+    """Full inventory of ~/.hermes.
+
+    Searching by filename keyword was too narrow - it surfaced auth.json (which
+    turned out to hold OpenRouter credentials, not MCP tokens) while telling us
+    nothing about where the Robinhood OAuth token actually lives. List
+    everything instead, minus the WhatsApp session noise.
+    """
+    section("2. Hermes state directory inventory")
     if not os.path.isdir(HERMES_DIR):
         print(f"  {HERMES_DIR} does not exist.")
         return []
 
-    candidates = []
+    found = []
     for root, dirs, files in os.walk(HERMES_DIR):
         dirs[:] = [d for d in dirs if d not in ("node_modules", "__pycache__", ".git")]
-        for name in files:
-            lowered = name.lower()
-            if any(hint in lowered for hint in ("token", "cred", "auth", "oauth", "session")):
-                path = os.path.join(root, name)
-                try:
-                    size = os.path.getsize(path)
-                    mode = oct(os.stat(path).st_mode & 0o777)
-                except OSError:
-                    size, mode = "?", "?"
-                candidates.append(path)
-                print(f"  {path}  ({size} bytes, mode {mode})")
+        # The WhatsApp bridge keeps dozens of session files; they are unrelated
+        # to MCP auth and drown out everything else.
+        if "whatsapp" in root.replace("\\", "/").split("/"):
+            continue
+        rel_root = os.path.relpath(root, HERMES_DIR)
+        for name in sorted(files):
+            path = os.path.join(root, name)
+            try:
+                size = os.path.getsize(path)
+                mode = oct(os.stat(path).st_mode & 0o777)
+            except OSError:
+                size, mode = "?", "?"
+            display = name if rel_root == "." else os.path.join(rel_root, name)
+            print(f"  {display}  ({size} bytes, mode {mode})")
+            found.append(path)
 
-    if not candidates:
-        print("  No obvious credential files found by name.")
-        print("  The token may live inside a database or a differently named file.")
-        print(f"  Worth inspecting manually: ls -la {HERMES_DIR}")
-    else:
-        print("\n  (Contents deliberately not printed. We only needed the location.)")
-    return candidates
+    print("\n  (Contents not printed. Looking for where an MCP OAuth token lives.)")
+    return found
+
+
+def inspect_json_structure(path, label):
+    """Prints a JSON file's shape - keys and value sizes, never values."""
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path) as handle:
+            data = json.load(handle)
+    except Exception as e:
+        print(f"  {label}: not readable as JSON ({e})")
+        return None
+
+    print(f"  {label} structure:")
+
+    def describe(node, indent="    "):
+        if isinstance(node, dict):
+            if not node:
+                print(f"{indent}(empty)")
+            for key, value in node.items():
+                if isinstance(value, (dict, list)):
+                    print(f"{indent}{key}:")
+                    describe(value, indent + "  ")
+                else:
+                    kind = type(value).__name__
+                    shown = f"<{kind}, {len(value)} chars>" if isinstance(value, str) else f"<{kind}: {value}>"
+                    print(f"{indent}{key}: {shown}")
+        elif isinstance(node, list):
+            print(f"{indent}[{len(node)} item(s)]")
+            if node:
+                describe(node[0], indent + "  ")
+
+    describe(data)
+    return data
+
+
+def discover_oauth(url):
+    """Asks the server how to authenticate, without any credentials.
+
+    If the agent's token cannot be reused, this process can run its own OAuth
+    2.1 PKCE flow - which is cleaner anyway, since it depends on the published
+    protocol rather than on Hermes' internal storage layout.
+    """
+    section("3. OAuth discovery (unauthenticated, read-only)")
+    try:
+        import requests
+    except ImportError:
+        print("  requests not available.")
+        return
+
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+
+    # An MCP server should answer 401 with a WWW-Authenticate header pointing at
+    # its protected-resource metadata (MCP authorization spec).
+    try:
+        response = requests.post(
+            url,
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+            headers={"Accept": "application/json, text/event-stream"},
+            timeout=15,
+        )
+        print(f"  POST {url} -> HTTP {response.status_code}")
+        for header in ("www-authenticate", "WWW-Authenticate"):
+            if header in response.headers:
+                print(f"    WWW-Authenticate: {response.headers[header]}")
+        if response.status_code == 401:
+            print("    (401 is the expected, useful answer: auth is the only gap.)")
+    except Exception as e:
+        print(f"  POST failed: {type(e).__name__}: {e}")
+
+    for suffix in ("/.well-known/oauth-protected-resource",
+                   "/.well-known/oauth-authorization-server",
+                   "/.well-known/openid-configuration"):
+        try:
+            response = requests.get(origin + suffix, timeout=15)
+            print(f"  GET {suffix} -> HTTP {response.status_code}")
+            if response.status_code == 200:
+                try:
+                    body = response.json()
+                    for key in ("issuer", "authorization_endpoint", "token_endpoint",
+                                "registration_endpoint", "resource", "scopes_supported",
+                                "authorization_servers", "code_challenge_methods_supported"):
+                        if key in body:
+                            print(f"    {key}: {json.dumps(body[key])}")
+                except ValueError:
+                    print("    (200 but not JSON)")
+        except Exception as e:
+            print(f"  GET {suffix} failed: {type(e).__name__}: {e}")
 
 
 async def probe_tools(url, token=None):
@@ -187,19 +296,32 @@ async def probe_tools(url, token=None):
         print("  Re-run this script afterwards.")
         return None
 
+    # Prefer this process's own OAuth credentials over a scavenged token.
+    auth = None
     headers = {"Authorization": f"Bearer {token}"} if token else None
-    if not token:
-        print("  No token supplied, attempting unauthenticated connection.")
-        print("  A 401 here is expected and still informative - it confirms the")
-        print("  endpoint is reachable and that auth is the only missing piece.")
+    try:
+        from src.services.robinhood_auth import build_oauth_provider, have_credentials
+        if have_credentials():
+            print("  Using stored OAuth credentials (scripts/robinhood_login.py).")
+            auth, headers = build_oauth_provider(), None
+        elif not token:
+            print("  Not logged in yet. Run this first:")
+            print("      venv/bin/python scripts/robinhood_login.py")
+            print("  Continuing unauthenticated - expect a 401.")
+    except ImportError:
+        pass
 
     try:
-        async with streamablehttp_client(url, headers=headers) as (read, write, _):
+        async with streamablehttp_client(url, headers=headers, auth=auth) as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 result = await session.list_tools()
     except Exception as e:
+        # The MCP client runs inside a TaskGroup, so the real cause arrives
+        # wrapped in an ExceptionGroup. Printing only the wrapper says nothing.
         print(f"  Connection failed: {type(e).__name__}: {e}")
+        for depth, cause in enumerate(_flatten_exception(e), start=1):
+            print(f"    [{depth}] {type(cause).__name__}: {cause}")
         return None
 
     tools = result.tools
@@ -238,7 +360,14 @@ def main():
 
     entry = find_agent_config()
     find_cached_credentials()
+
     token = os.environ.get("ROBINHOOD_MCP_TOKEN") or load_agent_token()
+    if not token:
+        # auth.json holds OpenRouter credentials, not MCP tokens. Check the
+        # other plausible store before concluding the token is not on disk.
+        section("2c. Other candidate token stores")
+        inspect_json_structure(os.path.join(HERMES_DIR, "sessions", "sessions.json"),
+                               "sessions/sessions.json")
 
     url = None
     if entry:
@@ -247,6 +376,7 @@ def main():
         url = "https://agent.robinhood.com/mcp/trading"
         print(f"\n  Falling back to the documented URL: {url}")
 
+    discover_oauth(url)
     asyncio.run(probe_tools(url, token))
 
     section("Next step")

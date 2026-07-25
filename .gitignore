@@ -23,6 +23,10 @@ env/
 # State files
 .since_id
 HALT
+HALT_TRADING
+
+# Robinhood OAuth tokens - grants trading access to the agentic account
+.robinhood_token.json
 
 # Python Cache
 __pycache__/
