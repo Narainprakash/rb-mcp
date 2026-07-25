@@ -165,31 +165,61 @@ def init_db():
     cursor = conn.cursor()
     cursor.executescript(SCHEMA)
 
-    # Migrations for databases created before a column was added.
-    cursor.execute("PRAGMA table_info(positions)")
-    position_columns = {row['name'] for row in cursor.fetchall()}
-    if 'add_without_parent' not in position_columns:
-        cursor.execute("ALTER TABLE positions ADD COLUMN add_without_parent BOOLEAN DEFAULT 0")
+    # Migrations for databases created before a column was added. Collected
+    # first so a snapshot can be taken before anything is altered.
+    def missing(table, column):
+        cursor.execute(f"PRAGMA table_info({table})")
+        return column not in {row['name'] for row in cursor.fetchall()}
 
-    cursor.execute("PRAGMA table_info(trades)")
-    trade_columns = {row['name'] for row in cursor.fetchall()}
-    if 'position_id' not in trade_columns:
-        cursor.execute("ALTER TABLE trades ADD COLUMN position_id INTEGER")
+    migrations = []
+    if missing('positions', 'add_without_parent'):
+        migrations.append("ALTER TABLE positions ADD COLUMN add_without_parent BOOLEAN DEFAULT 0")
+    if missing('trades', 'position_id'):
+        migrations.append("ALTER TABLE trades ADD COLUMN position_id INTEGER")
+    if missing('alerts', 'tweet_created_at'):
+        migrations.append("ALTER TABLE alerts ADD COLUMN tweet_created_at DATETIME")
+    if missing('decisions', 'latency_sec'):
+        migrations.append("ALTER TABLE decisions ADD COLUMN latency_sec REAL")
 
-    cursor.execute("PRAGMA table_info(alerts)")
-    alert_columns = {row['name'] for row in cursor.fetchall()}
-    if 'tweet_created_at' not in alert_columns:
-        cursor.execute("ALTER TABLE alerts ADD COLUMN tweet_created_at DATETIME")
-
-    cursor.execute("PRAGMA table_info(decisions)")
-    decision_columns = {row['name'] for row in cursor.fetchall()}
-    if 'latency_sec' not in decision_columns:
-        cursor.execute("ALTER TABLE decisions ADD COLUMN latency_sec REAL")
+    if migrations:
+        _snapshot_before_migration()
+        for statement in migrations:
+            cursor.execute(statement)
+        print(f"Applied {len(migrations)} schema migration(s).")
 
     cursor.executescript(INDEXES)
 
     conn.commit()
     conn.close()
+
+
+def _snapshot_before_migration():
+    """Snapshots the database before altering it.
+
+    Migrations here are additive, so this is belt-and-braces rather than
+    strictly required - but schema changes now ship regularly, and a snapshot
+    taken automatically is worth more than one nobody remembered to take. A
+    failure here is logged loudly and does not block startup: a bot that will
+    not start manages no exits, which is worse than a missing snapshot.
+    """
+    from src.core.backup import backup_database
+    from src.core.config import system_config
+
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    ops = system_config.settings.get('ops', {})
+    dest_dir = ops.get('backup_dir') or os.path.join(project_root, 'backups')
+    if not os.path.isabs(dest_dir):
+        dest_dir = os.path.join(project_root, dest_dir)
+
+    try:
+        path = backup_database(DB_PATH, dest_dir,
+                               retention=ops.get('backup_retention', 14),
+                               label='pre-migration')
+        print(f"Pre-migration snapshot: {path}")
+    except FileNotFoundError:
+        pass  # fresh install, nothing to snapshot
+    except Exception as e:
+        print(f"WARNING: pre-migration snapshot failed ({e}); continuing with migration.")
 
 def log_system_event(event_type: str, message: str, user_id: int = None):
     conn = get_connection()

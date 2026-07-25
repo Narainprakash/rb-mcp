@@ -19,6 +19,7 @@ Hermes is a self-hosted agent that polls an X (Twitter) account for options trad
 - **Soft Pause**: Stop opening new positions while still managing exits — via the `HALT_TRADING` file globally, or `trading_enabled` per user.
 - **Style & Ticker Filters**: Opt out of `0DTE`/`LOTTO` entirely, or restrict trading to an allow list.
 - **Signal Latency Tracking**: Records seconds from tweet posted to decision made, so you can tell whether your polling cadence is actually fast enough.
+- **Automated Backups**: Nightly online snapshots with rotation, plus an automatic snapshot before any schema migration.
 - **Skip Transparency**: Every skipped alert notifies you with the reason — including risk-limit skips, so you always know when the bot has stopped trading because it hit your daily spend or open-position cap.
 - **Login Protection**: The dashboard locks out an IP after 5 failed logins in 5 minutes and records every failed attempt to the system event feed.
 - **Daily Summary Push**: A configurable end-of-day report (P/L, Trades, Alerts, Open Positions, API Calls) sent via WhatsApp/Telegram to each user.
@@ -130,10 +131,25 @@ We use `systemd` to run Hermes in the background and ensure it restarts automati
    Restart=always
    RestartSec=5
    EnvironmentFile=/home/rb-mcp-user/rb-mcp/.env
+   # Flush print() to the journal immediately; Python block-buffers stdout when
+   # it is not a terminal, which makes the logs look empty while the bot works.
+   Environment=PYTHONUNBUFFERED=1
 
    [Install]
    WantedBy=multi-user.target
    ```
+
+   Add restart rate limiting to the `[Unit]` section so a startup failure (bad
+   config, missing dependency) stops after five attempts instead of looping
+   forever and filling the journal:
+   ```ini
+   [Unit]
+   Description=Hermes Trading Agent
+   After=network.target
+   StartLimitIntervalSec=300
+   StartLimitBurst=5
+   ```
+   If it does hit the limit, `sudo systemctl reset-failed rb-mcp` clears it after you fix the cause.
 3. Enable and start the service:
    ```bash
    sudo systemctl daemon-reload
@@ -181,7 +197,7 @@ python -c "from werkzeug.security import generate_password_hash; print(generate_
 sqlite3 hermes_mt.db "INSERT INTO users (username, password_hash) VALUES ('admin', 'hash_from_above');"
 ```
 
-Also set a session signing key before going live, so login sessions don't reset every restart — set `dashboard.secret_key` in `config.yaml`, or `DASHBOARD_SECRET_KEY` in `.env`:
+Session signing key: if you set neither `dashboard.secret_key` in `config.yaml` nor `DASHBOARD_SECRET_KEY` in `.env`, the dashboard generates one on first start and persists it in the database, so logins survive restarts without any action from you. Set it explicitly only if you want the key held outside the database:
 ```bash
 python -c "import secrets; print(secrets.token_hex(32))"
 ```
@@ -214,6 +230,63 @@ python -c "import secrets; print(secrets.token_hex(32))"
    sudo systemctl enable rb-mcp-dash
    sudo systemctl start rb-mcp-dash
    ```
+
+### Step 2.6.1: Automated Database Backups
+`hermes_mt.db` holds your entire trade history, open positions, and dashboard password hashes, and it is deliberately **not** in git. Back it up.
+
+Use the provided script rather than `cp`: the database runs in WAL mode and is written to continuously, so a file copy can capture a torn state missing recent transactions. The script uses SQLite's online backup API and is safe to run while the services are up.
+
+Test it once by hand:
+```bash
+cd ~/rb-mcp && venv/bin/python scripts/backup_db.py
+```
+
+Then create a systemd timer. First the service:
+```bash
+sudo nano /etc/systemd/system/rb-mcp-backup.service
+```
+```ini
+[Unit]
+Description=Hermes Database Backup
+
+[Service]
+Type=oneshot
+User=rb-mcp-user
+WorkingDirectory=/home/rb-mcp-user/rb-mcp
+ExecStart=/home/rb-mcp-user/rb-mcp/venv/bin/python scripts/backup_db.py
+```
+
+Then the timer:
+```bash
+sudo nano /etc/systemd/system/rb-mcp-backup.timer
+```
+```ini
+[Unit]
+Description=Nightly Hermes database backup
+
+[Timer]
+OnCalendar=*-*-* 17:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+Enable it (17:30 ET is after the close and after the daily summary):
+```bash
+sudo systemctl daemon-reload && sudo systemctl enable --now rb-mcp-backup.timer
+```
+
+Check it is scheduled, and review results with `journalctl -u rb-mcp-backup`:
+```bash
+systemctl list-timers rb-mcp-backup --no-pager
+```
+
+Snapshots land in `backups/` (configurable via `ops.backup_dir`), are written `0600` because they contain password hashes, and are pruned to `ops.backup_retention` (default 14). The directory is gitignored.
+
+> **Note:** these snapshots live on the same VPS. That covers the case you already hit — a botched update or an accidental delete — but not disk failure. If the account is funded meaningfully, copy them off-box periodically.
+
+**You also get a snapshot automatically before any schema migration.** When `init_db()` detects columns to add, it writes a `-pre-migration` snapshot first and logs the path.
 
 ### Step 2.7: Tailscale VPN (External Access)
 To securely access the web dashboard without opening ports or buying a domain, we use Tailscale to create a private network between your devices:

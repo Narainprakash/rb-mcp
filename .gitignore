@@ -12,6 +12,9 @@ hermes.db
 hermes_mt.db
 *.sqlite3
 
+# Database snapshots (contain trade history and password hashes)
+backups/
+
 # Python Virtual Environment
 venv/
 env/

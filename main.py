@@ -10,7 +10,7 @@ from src.services.quotes import QuoteUnavailable
 from src.services.monitor import process_open_orders
 from src.services.notifier import notify_skipped
 from src.services.summary import summary_loop
-from src.core.security import check_kill_switch, trading_halted
+from src.core.security import check_kill_switch, check_secret_file_permissions, trading_halted
 from src.core.time_utils import NY_TZ, get_current_polling_interval, get_today_ny_bounds
 
 
@@ -176,6 +176,7 @@ def trade_loop():
 if __name__ == "__main__":
     print("Initializing Database...")
     init_db()
+    check_secret_file_permissions()
     
     print("Starting Background Threads...")
     # Start poller thread

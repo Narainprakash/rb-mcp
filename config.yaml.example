@@ -110,6 +110,14 @@ gateway:
   authorized_telegram_user: "Prakash_1803"  # Only this Telegram username is allowed to issue conversational commands to the bot
 
 # ==========================================
+# Hermes Config: Operations
+# ==========================================
+ops:
+  backup_dir: "backups"                  # Where database snapshots go. Relative paths resolve from the project root.
+                                          # Snapshots hold trade history and password hashes: written 0600, gitignored.
+  backup_retention: 14                   # Number of snapshots to keep. Older ones are pruned automatically.
+
+# ==========================================
 # Hermes Config: Daily Summary Settings
 # ==========================================
 summary:

@@ -253,6 +253,51 @@ def test_daily_loss_limit_pauses_entries(user_db):
     assert "loss limit" in reason
 
 
+# --- Ops: backups ----------------------------------------------------------
+
+def test_backup_is_consistent_under_an_open_write(tmp_path, monkeypatch):
+    """The online backup API must exclude uncommitted work. A file copy under
+    WAL can capture a torn state; this is why we don't use one."""
+    import src.core.db as core_db
+    from src.core.backup import backup_database
+
+    monkeypatch.setattr(core_db, "DB_PATH", str(tmp_path / "live.db"))
+    core_db.init_db()
+    conn = core_db.get_connection()
+    conn.execute("INSERT INTO alerts (tweet_id, raw_text, parse_status) VALUES ('1','committed','success')")
+    conn.commit()
+
+    writer = core_db.get_connection()
+    writer.execute("INSERT INTO alerts (tweet_id, raw_text, parse_status) VALUES ('2','uncommitted','success')")
+
+    path = backup_database(core_db.DB_PATH, str(tmp_path / "backups"), retention=5)
+
+    writer.rollback()
+    writer.close()
+    conn.close()
+
+    snap = sqlite3.connect(path)
+    try:
+        assert snap.execute("SELECT COUNT(*) FROM alerts").fetchone()[0] == 1
+    finally:
+        snap.close()
+
+
+def test_backup_rotation_keeps_only_retention(tmp_path):
+    from src.core.backup import prune_backups
+
+    dest = tmp_path / "backups"
+    dest.mkdir()
+    for stamp in ["20260101-000001", "20260102-000001", "20260103-000001", "20260104-000001"]:
+        (dest / f"hermes_mt-{stamp}.db").write_text("x")
+    (dest / "unrelated.txt").write_text("keep me")
+
+    prune_backups(str(dest), retention=2)
+
+    remaining = sorted(p.name for p in dest.iterdir())
+    assert remaining == ["hermes_mt-20260103-000001.db", "hermes_mt-20260104-000001.db", "unrelated.txt"]
+
+
 def test_init_db_upgrades_a_pre_migration_database(tmp_path, monkeypatch):
     """Indexes on newly added columns must be created after the ALTER TABLEs.
     On an existing database CREATE TABLE IF NOT EXISTS is a no-op, so building

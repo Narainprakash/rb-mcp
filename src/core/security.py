@@ -38,6 +38,28 @@ def check_kill_switch():
         except Exception as e:
             print(f"Failed to log resume event: {e}")
 
+def check_secret_file_permissions():
+    """Warns if .env is readable beyond its owner.
+
+    Spec 9.2 requires mode 600 on secrets. Warn rather than refuse to start:
+    the file being over-permissive is a problem, but a bot that will not run
+    manages no open positions, which is a bigger one.
+    """
+    if os.name == 'nt':
+        return  # POSIX mode bits aren't meaningful on Windows
+    env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env")
+    if not os.path.exists(env_path):
+        return
+    mode = os.stat(env_path).st_mode & 0o777
+    if mode & 0o077:
+        message = f".env is group/world readable (mode {oct(mode)}). Run: chmod 600 {env_path}"
+        print(f"WARNING: {message}")
+        try:
+            log_system_event('security_warning', message)
+        except Exception:
+            pass
+
+
 def trading_halted():
     """True when the HALT_TRADING file exists.
 

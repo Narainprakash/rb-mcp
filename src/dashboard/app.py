@@ -16,7 +16,46 @@ from src.core.db import get_connection, log_system_event
 from src.core.config import get_user_config, system_config
 
 app = Flask(__name__)
-app.secret_key = system_config.dashboard.get("secret_key") or os.environ.get("DASHBOARD_SECRET_KEY") or secrets.token_hex(32)
+def _resolve_secret_key():
+    """Session signing key, in order of preference: config, environment, then a
+    generated key persisted in the database.
+
+    The persisted fallback matters operationally: a fresh random key per process
+    logs every user out on each restart, which trains people to ignore it. Note
+    it lives in the same database as the password hashes, so it offers no
+    protection against someone who already has read access to that file.
+    """
+    configured = system_config.dashboard.get("secret_key") or os.environ.get("DASHBOARD_SECRET_KEY")
+    if configured:
+        return configured
+
+    try:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            row = cursor.execute(
+                "SELECT value FROM system_state WHERE key = 'dashboard_secret_key'"
+            ).fetchone()
+            if row and row['value']:
+                return row['value']
+
+            key = secrets.token_hex(32)
+            cursor.execute("""
+                INSERT INTO system_state (key, value) VALUES ('dashboard_secret_key', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """, (key,))
+            conn.commit()
+            return key
+        finally:
+            conn.close()
+    except Exception as e:
+        # Database not initialised yet (rb-mcp runs init_db, not the dashboard).
+        print(f"WARNING: could not persist dashboard secret key ({e}); "
+              "sessions will not survive a restart.")
+        return secrets.token_hex(32)
+
+
+app.secret_key = _resolve_secret_key()
 
 login_manager = LoginManager()
 login_manager.init_app(app)
