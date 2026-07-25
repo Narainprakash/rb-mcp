@@ -229,6 +229,52 @@ def inspect_json_structure(path, label):
     return data
 
 
+def inspect_agent_mcp_tokens():
+    """Reports the agent's own MCP credential layout, without reusing it.
+
+    We deliberately do NOT borrow these tokens. Refresh tokens are usually
+    single-use and rotating, so if this process refreshed one, the agent's
+    stored copy would silently become invalid and break the conversational
+    Robinhood access that already works. Our own DCR client avoids that race.
+
+    What is worth reading is the *client registration*: it shows which redirect
+    URI the authorization server actually accepted, which is the main unknown
+    in our own login flow.
+    """
+    section("2c. Agent's MCP credential layout (read for reference, not reused)")
+    token_dir = os.path.join(HERMES_DIR, "mcp-tokens")
+    if not os.path.isdir(token_dir):
+        print(f"  {token_dir} not found.")
+        return
+
+    for name in sorted(os.listdir(token_dir)):
+        if not name.startswith("robinhood"):
+            continue
+        path = os.path.join(token_dir, name)
+        try:
+            with open(path) as handle:
+                data = json.load(handle)
+        except Exception as e:
+            print(f"  {name}: unreadable ({e})")
+            continue
+
+        print(f"\n  --- {name} ---")
+        if not isinstance(data, dict):
+            print(f"      (top-level {type(data).__name__})")
+            continue
+
+        for key, value in data.items():
+            lowered = key.lower()
+            # Non-secret registration details are the useful part; anything
+            # token-shaped is reported by size only.
+            if any(s in lowered for s in ("token", "secret", "code", "jwt")):
+                size = len(value) if isinstance(value, str) else value
+                print(f"      {key}: <redacted, {size} chars>" if isinstance(value, str)
+                      else f"      {key}: <{type(value).__name__}>")
+            else:
+                print(f"      {key}: {json.dumps(value, default=str)[:200]}")
+
+
 def discover_oauth(url):
     """Asks the server how to authenticate, without any credentials.
 
@@ -362,12 +408,7 @@ def main():
     find_cached_credentials()
 
     token = os.environ.get("ROBINHOOD_MCP_TOKEN") or load_agent_token()
-    if not token:
-        # auth.json holds OpenRouter credentials, not MCP tokens. Check the
-        # other plausible store before concluding the token is not on disk.
-        section("2c. Other candidate token stores")
-        inspect_json_structure(os.path.join(HERMES_DIR, "sessions", "sessions.json"),
-                               "sessions/sessions.json")
+    inspect_agent_mcp_tokens()
 
     url = None
     if entry:
