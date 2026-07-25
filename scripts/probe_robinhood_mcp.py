@@ -21,6 +21,10 @@ import json
 import os
 import sys
 
+# Running `python scripts/probe_robinhood_mcp.py` puts scripts/ on sys.path,
+# not the project root, so `import src.*` fails without this.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 HERMES_DIR = os.path.expanduser("~/.hermes")
 AGENT_CONFIG = os.path.join(HERMES_DIR, "config.yaml")
 
@@ -346,16 +350,20 @@ async def probe_tools(url, token=None):
     auth = None
     headers = {"Authorization": f"Bearer {token}"} if token else None
     try:
-        from src.services.robinhood_auth import build_oauth_provider, have_credentials
+        from src.services.robinhood_auth import TOKEN_PATH, build_oauth_provider, have_credentials
         if have_credentials():
             print("  Using stored OAuth credentials (scripts/robinhood_login.py).")
             auth, headers = build_oauth_provider(), None
         elif not token:
-            print("  Not logged in yet. Run this first:")
-            print("      venv/bin/python scripts/robinhood_login.py")
+            print(f"  No usable credentials in {TOKEN_PATH}.")
+            print("  Run: venv/bin/python scripts/robinhood_login.py")
             print("  Continuing unauthenticated - expect a 401.")
-    except ImportError:
-        pass
+    except ImportError as e:
+        # Never swallow this: a silent import failure here looks exactly like
+        # "not authenticated" and sends you hunting for a token problem that
+        # does not exist.
+        print(f"  ERROR: could not load stored credentials: {e}")
+        print("  Run this from the project root, not from scripts/.")
 
     try:
         async with streamablehttp_client(url, headers=headers, auth=auth) as (read, write, _):
