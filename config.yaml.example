@@ -54,10 +54,13 @@ decision:
 # ==========================================
 execution:
   paper_mode: true                       # If true, simulates trades and fills. If false, connects to Robinhood MCP for live trading.
-  quote_source: "simulated"              # Where option quotes come from. "simulated" is NOT market data - it exercises the
-                                          # pipeline deterministically but says nothing about strategy performance.
-                                          # "robinhood" is registered but not implemented; it fails closed rather than
-                                          # falling back to invented prices. See src/services/quotes.py.
+  quote_source: "simulated"              # Where option quotes come from.
+                                          #   "simulated" - NOT market data. Exercises the pipeline deterministically but
+                                          #                 says nothing about strategy performance.
+                                          #   "robinhood" - real bid/ask from the Agentic Trading MCP. Requires a one-time
+                                          #                 login: venv/bin/python scripts/robinhood_login.py
+                                          # Either way, a provider that cannot produce a price skips the signal rather than
+                                          # falling back to an invented one. See src/services/quotes.py.
   robinhood_account_id: "<your_agentic_account_id>"  # Your specific Robinhood Agentic Account ID for live trading
   error_circuit_breaker_count: 3         # Consecutive execution errors *per user* before that user's failures engage the kill switch
   zero_dte_market_sell_cutoff: "15:50"   # Time (ET) to automatically market-sell open 0DTE limit sell orders to prevent worthless expiration

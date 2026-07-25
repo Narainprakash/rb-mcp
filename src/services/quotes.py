@@ -52,34 +52,44 @@ def _simulated_quote(ticker, expiry, strike, option_type, reference_price):
 
 
 def _robinhood_quote(ticker, expiry, strike, option_type, reference_price):
+    """Real quotes from the Robinhood Agentic Trading MCP.
+
+    `reference_price` is unused here - it exists for the simulated provider.
+    Real prices come from the broker, which is the entire point.
     """
-    Placeholder for quotes from the Robinhood Agentic Trading MCP - the right
-    long-term source, since quoting the same venue we execute on removes any
-    basis risk between the decision price and the fill price.
+    from src.services.robinhood_instruments import resolve_instrument_id
+    from src.services.robinhood_mcp import MCPCallFailed, call_tool
 
-    Not implemented yet. Two blockers, one of them now confirmed:
+    try:
+        instrument_id = resolve_instrument_id(ticker, expiry, strike, option_type)
+        data = call_tool("get_option_quotes", {"instrument_ids": [instrument_id]})
+    except MCPCallFailed as e:
+        # Surfaced as QuoteUnavailable so the caller skips the signal. Never
+        # fall back to a simulated price: silently trading on invented data is
+        # worse than not trading.
+        raise QuoteUnavailable(str(e))
 
-    1. Options support on the MCP is unconfirmed (specs.md section 0.2).
-    2. There is no way for this process to invoke an MCP tool. Checked against
-       the CLI on 2026-07-25: `hermes mcp` offers only connection management
-       (add / remove / list / test / configure / login / reauth / catalog /
-       install / serve) with no call or invoke subcommand, so the shell-out
-       route used for `hermes send` does not exist for MCP tools. `serve` is
-       the reverse direction - it exposes Hermes to other agents.
+    quotes = data.get("quotes") if isinstance(data, dict) else data
+    if not isinstance(quotes, list) or not quotes:
+        raise QuoteUnavailable(f"no quote returned for {ticker} {strike}{option_type}")
 
-    The remaining viable path is a real MCP client in this process, reusing the
-    OAuth token the agent has already cached. Do NOT route quotes or orders
-    through the agent conversationally (`hermes send` and parse the reply):
-    that puts an LLM in the deterministic trading path, which section 1 of the
-    spec exists to prevent, and would make a hallucinated price into a trade.
+    quote = quotes[0]
+    try:
+        bid = float(quote["bid_price"])
+        ask = float(quote["ask_price"])
+    except (KeyError, TypeError, ValueError) as e:
+        raise QuoteUnavailable(
+            f"unexpected quote shape for {ticker} {strike}{option_type}: {e}"
+        )
 
-    Fails closed rather than falling back to simulated prices, so a
-    misconfiguration cannot quietly trade on invented data.
-    """
-    raise QuoteUnavailable(
-        "quote_source 'robinhood' is not implemented yet - no MCP client in this process. "
-        "Set execution.quote_source to 'simulated' or wire a provider."
-    )
+    if ask <= 0 or bid < 0 or bid > ask:
+        # A crossed or zero market means no tradeable price - usually a halt or
+        # an illiquid contract. Decisioning on it would be meaningless.
+        raise QuoteUnavailable(
+            f"unusable market for {ticker} {strike}{option_type}: bid {bid}, ask {ask}"
+        )
+
+    return {"bid": bid, "ask": ask}
 
 
 PROVIDERS = {
@@ -95,7 +105,7 @@ PROVIDERS = {
 PROVIDER_META = {
     "simulated": {"implemented": True, "live_data": False,
                   "label": "Simulated (not market data)"},
-    "robinhood": {"implemented": False, "live_data": True,
+    "robinhood": {"implemented": True, "live_data": True,
                   "label": "Robinhood Agentic MCP"},
 }
 

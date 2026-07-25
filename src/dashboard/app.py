@@ -150,7 +150,17 @@ def robinhood_status(user_config, user_id):
     # trading process still cannot place an order - it is a separate process with
     # no MCP client and no share of that session. Reporting a flat "not
     # integrated" when the agent visibly works reads as a bug, so name the state.
-    if meta['implemented'] and source == 'robinhood':
+    try:
+        from src.services.robinhood_auth import have_credentials
+        logged_in = have_credentials()
+    except Exception:
+        logged_in = False
+
+    if meta['implemented'] and not logged_in:
+        # The code exists but cannot authenticate, so it would fail closed on
+        # every quote. Say so rather than implying it is ready.
+        status, label = 'needs_login', 'Needs login'
+    elif meta['implemented'] and source == 'robinhood':
         status, label = 'active', 'Active'
     elif meta['implemented']:
         status, label = 'available', 'Available (not selected)'
@@ -163,11 +173,13 @@ def robinhood_status(user_config, user_id):
     budget = system_config.settings.get('execution', {}).get('broker_rate_limit_per_min', 60)
 
     prerequisites = [
-        f"Agent MCP registered: {'yes' if registered else 'no'}",
+        f"Bot logged in: {'yes' if logged_in else 'no'}",
         f"Account ID set: {'yes' if account_id_set else 'no'}",
         f"Quote source: {source}",
         f"API budget: {calls_last_min}/{budget} per min",
     ]
+    if status == 'needs_login':
+        prerequisites.insert(0, "Run scripts/robinhood_login.py")
     if refused:
         prerequisites.append(f"Refused (rate limit): {refused}")
     if status == 'agent_only':

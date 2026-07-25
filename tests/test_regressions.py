@@ -101,9 +101,140 @@ def test_unknown_quote_source_fails_closed():
         get_quote("SPY", "2026-08-21", 750, "C", 1.81, source="nonexistent")
 
 
-def test_robinhood_provider_fails_closed():
+def test_robinhood_provider_without_credentials_fails_closed(rh_env, monkeypatch):
+    """Superseded the old 'not implemented' assertion: the provider now works,
+    but must still refuse rather than fall back when it cannot authenticate."""
+    import src.services.robinhood_instruments as instruments
+    from src.services.quotes import QuoteUnavailable, get_quote
+    from src.services.robinhood_mcp import MCPCallFailed
+
+    def unauthenticated(tool, arguments, **kwargs):
+        raise MCPCallFailed("not authenticated to Robinhood; run scripts/robinhood_login.py")
+
+    monkeypatch.setattr(instruments, "call_tool", unauthenticated)
     with pytest.raises(QuoteUnavailable):
-        get_quote("SPY", "2026-08-21", 750, "C", 1.81, source="robinhood")
+        get_quote("SPY", "2026-08-21", 750, "C", 1.81, source="robinhood", cache_ttl_sec=0)
+
+
+# --- Robinhood MCP quote provider ------------------------------------------
+
+@pytest.fixture
+def rh_env(tmp_path, monkeypatch):
+    """Robinhood provider with a mockable MCP transport and a real DB."""
+    import src.core.db as core_db
+    import src.services.broker_limits as limits
+    import src.services.quotes as quotes
+    import src.services.robinhood_mcp as rh
+
+    monkeypatch.setattr(core_db, "DB_PATH", str(tmp_path / "rh.db"))
+    core_db.init_db()
+    monkeypatch.setattr(rh, "have_credentials", lambda: True)
+    limits.reset()
+    quotes.clear_cache()
+
+    def install(handler):
+        # robinhood_instruments binds call_tool at import time, so patching only
+        # robinhood_mcp would leave the instrument lookup hitting the network.
+        import src.services.robinhood_instruments as instruments
+        monkeypatch.setattr(rh, "call_tool", handler)
+        monkeypatch.setattr(instruments, "call_tool", handler)
+
+    return install
+
+
+def _responder(instrument_result, quote_result=None):
+    """Builds an MCP handler; an Exception value is raised instead of returned."""
+    seen = []
+
+    def handler(tool, arguments, **kwargs):
+        seen.append(tool)
+        source = instrument_result if tool == "get_option_instruments" else quote_result
+        if isinstance(source, Exception):
+            raise source
+        return source
+
+    handler.seen = seen
+    return handler
+
+
+def test_robinhood_quote_returns_real_bid_ask(rh_env):
+    from src.services.quotes import get_quote
+
+    handler = _responder({"instruments": [{"id": "uuid-1"}]},
+                         {"quotes": [{"bid_price": "1.80", "ask_price": "1.86"}]})
+    rh_env(handler)
+
+    quote = get_quote("SPY", "2026-08-21", 750, "C", 1.81, source="robinhood", cache_ttl_sec=0)
+    assert quote == {"bid": 1.80, "ask": 1.86}
+
+
+def test_instrument_uuid_is_cached_across_quotes(rh_env):
+    """A contract's UUID never changes, so only the first quote should pay for
+    the lookup. Without this the monitor triples its broker usage."""
+    from src.services.quotes import get_quote
+
+    handler = _responder({"instruments": [{"id": "uuid-1"}]},
+                         {"quotes": [{"bid_price": "1.80", "ask_price": "1.86"}]})
+    rh_env(handler)
+
+    get_quote("SPY", "2026-08-21", 750, "C", 1.81, source="robinhood", cache_ttl_sec=0)
+    assert handler.seen == ["get_option_instruments", "get_option_quotes"]
+
+    handler.seen.clear()
+    get_quote("SPY", "2026-08-21", 750, "C", 1.81, source="robinhood", cache_ttl_sec=0)
+    assert handler.seen == ["get_option_quotes"]
+
+
+@pytest.mark.parametrize("label,instruments,quote", [
+    ("ambiguous match", {"instruments": [{"id": "a"}, {"id": "b"}]}, None),
+    ("no contract", {"instruments": []}, None),
+    ("crossed market", {"instruments": [{"id": "c"}]},
+     {"quotes": [{"bid_price": "2.00", "ask_price": "1.00"}]}),
+    ("zero ask", {"instruments": [{"id": "d"}]},
+     {"quotes": [{"bid_price": "0", "ask_price": "0"}]}),
+    ("malformed payload", {"instruments": [{"id": "e"}]}, {"quotes": [{"foo": "bar"}]}),
+    ("empty quotes", {"instruments": [{"id": "f"}]}, {"quotes": []}),
+])
+def test_bad_market_data_fails_closed(rh_env, label, instruments, quote):
+    """Every bad-data path must skip the signal, never invent or guess a price."""
+    from src.services.quotes import QuoteUnavailable, get_quote
+
+    rh_env(_responder(instruments, quote))
+    with pytest.raises(QuoteUnavailable):
+        get_quote("SPY", "2026-08-21", 750, "C", 1.81, source="robinhood", cache_ttl_sec=0)
+
+
+def test_mcp_failure_fails_closed(rh_env):
+    from src.services.quotes import QuoteUnavailable, get_quote
+    from src.services.robinhood_mcp import MCPCallFailed
+
+    rh_env(_responder(MCPCallFailed("token expired: 401")))
+    with pytest.raises(QuoteUnavailable) as excinfo:
+        get_quote("SPY", "2026-08-21", 750, "C", 1.81, source="robinhood", cache_ttl_sec=0)
+    assert "401" in str(excinfo.value)
+
+
+def test_account_must_be_agentic_and_options_enabled(rh_env):
+    """The tool docs require agentic_allowed plus option level 2/3 before any
+    order. Enforcing it here turns a misconfigured account into a clean skip."""
+    import src.services.robinhood_mcp as rh
+
+    cases = [
+        ({"accounts": [{"account_number": "X1", "agentic_allowed": True,
+                        "option_level": "option_level_2"}]}, True),
+        ({"accounts": [{"account_number": "X1", "agentic_allowed": False,
+                        "option_level": "option_level_3"}]}, False),
+        ({"accounts": [{"account_number": "X1", "agentic_allowed": True,
+                        "option_level": "option_level_0"}]}, False),
+        ({"accounts": [{"account_number": "X1", "agentic_allowed": True,
+                        "option_level": ""}]}, False),
+        ({"accounts": [{"account_number": "OTHER", "agentic_allowed": True,
+                        "option_level": "option_level_2"}]}, False),
+    ]
+    for payload, expected in cases:
+        rh_env(lambda tool, args, **kw: payload)
+        ok, reason = rh.account_is_tradeable("X1")
+        assert ok is expected, f"{payload} -> {reason}"
 
 
 # --- Broker API budget -----------------------------------------------------

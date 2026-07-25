@@ -120,6 +120,19 @@ CREATE TABLE IF NOT EXISTS api_calls (
     timestamp DATETIME DEFAULT (datetime('now', 'localtime'))
 );
 
+-- Contract -> Robinhood option instrument UUID. Quotes take UUIDs, not
+-- ticker/strike/expiry, and a contract's UUID never changes, so caching this
+-- permanently turns a three-call lookup chain into a single quote call.
+CREATE TABLE IF NOT EXISTS option_instruments (
+    ticker TEXT NOT NULL,
+    expiry TEXT NOT NULL,
+    strike REAL NOT NULL,
+    option_type TEXT NOT NULL,
+    instrument_id TEXT NOT NULL,
+    created_at DATETIME DEFAULT (datetime('now', 'localtime')),
+    PRIMARY KEY (ticker, expiry, strike, option_type)
+);
+
 -- Small key/value store for service liveness and similar singletons.
 CREATE TABLE IF NOT EXISTS system_state (
     key TEXT PRIMARY KEY,
