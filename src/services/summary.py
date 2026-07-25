@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 from src.core.config import get_user_config, system_config
 from src.core.db import get_connection, log_system_event
-from src.core.time_utils import NY_TZ
+from src.core.time_utils import NY_TZ, is_market_open_today
 from src.services.notifier import NOTIFY_TIMEOUT_SEC
 
 def get_daily_metrics(user_id: int, date_str: str):
@@ -70,19 +70,51 @@ def send_summary_notification(user_id: int, summary_text: str):
             print(f"Failed to send daily summary to {target} for user {user_id}: {e}")
             log_system_event('error', f"Summary push failed for {target}: {e}", user_id=user_id)
 
+def _last_summary_date(user_id):
+    """The NY date this user was last sent a summary, from the database.
+
+    Persisted rather than held in memory: an in-memory flag resets on every
+    service restart, so any restart after the send time mails the summary
+    again. systemd restarts on failure, so that is not a rare case.
+    """
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT value FROM system_state WHERE key = ?", (f"summary_last_sent:{user_id}",)
+        ).fetchone()
+        return row['value'] if row else None
+    finally:
+        conn.close()
+
+
+def _record_summary_sent(user_id, date_str):
+    conn = get_connection()
+    try:
+        conn.execute("""
+            INSERT INTO system_state (key, value, updated_at)
+            VALUES (?, ?, datetime('now', 'localtime'))
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+        """, (f"summary_last_sent:{user_id}", date_str))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def summary_loop():
     print("Starting Hermes Daily Summary Scheduler...")
     log_system_event('startup', 'Hermes Daily Summary Scheduler started')
     
-    # Tracked per user: a shared flag would let the earliest-scheduled user's
-    # send suppress every user configured for a later time.
-    last_sent_date = {}
-
     while True:
         try:
             now = datetime.now(NY_TZ)
             current_date_str = now.strftime("%Y-%m-%d")
-            
+
+            # No trading happened, so there is nothing to report. Without this
+            # the bot mails a row of zeroes every weekend and holiday.
+            if not is_market_open_today():
+                time.sleep(300)
+                continue
+
             # Fetch all active users
             conn = get_connection()
             try:
@@ -103,7 +135,7 @@ def summary_loop():
                 target_time = datetime.strptime(target_time_str, "%H:%M").time()
                 
                 # Check if it's past the target time and we haven't sent it today
-                if now.time() >= target_time and last_sent_date.get(user_id) != current_date_str:
+                if now.time() >= target_time and _last_summary_date(user_id) != current_date_str:
                     metrics = get_daily_metrics(user_id, current_date_str)
                     
                     # Format message
@@ -125,7 +157,7 @@ def summary_loop():
                     
                     send_summary_notification(user_id, summary_text)
                     log_system_event('system', f"Daily summary generated and sent for {current_date_str}", user_id=user_id)
-                    last_sent_date[user_id] = current_date_str
+                    _record_summary_sent(user_id, current_date_str)
 
 
         except Exception as e:
