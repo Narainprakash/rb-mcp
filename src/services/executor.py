@@ -110,8 +110,14 @@ def execute_trade(user_id: int, decision_id: int, alert_id: int, ticker: str, ex
     """
     global _consecutive_errors
     config = get_user_config(user_id)
-    
+
     paper_mode = config.execution.get('paper_mode', True)
+    if not paper_mode:
+        # No real Robinhood MCP integration exists yet (get_live_quote is a mock).
+        # Fail safe into paper mode instead of silently faking a live order.
+        log_system_event('error', "Live execution requested but Robinhood MCP is not integrated; forcing paper mode", user_id=user_id)
+        notify_error("Executor", "Live trading requested but Robinhood MCP is not integrated; falling back to paper mode", user_id=user_id)
+        paper_mode = True
     contracts = config.decision.get('contracts_per_signal', 1)
     breaker_limit = config.execution.get('error_circuit_breaker_count', 3)
     

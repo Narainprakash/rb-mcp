@@ -1,5 +1,6 @@
 import os
 import sys
+import secrets
 from flask import Flask, jsonify, render_template, request, redirect, url_for, flash
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import check_password_hash
@@ -14,7 +15,7 @@ from src.core.db import get_connection
 from src.core.config import get_user_config, system_config
 
 app = Flask(__name__)
-app.secret_key = system_config.dashboard.get("secret_key", "super_secret_dev_key")
+app.secret_key = system_config.dashboard.get("secret_key") or os.environ.get("DASHBOARD_SECRET_KEY") or secrets.token_hex(32)
 
 login_manager = LoginManager()
 login_manager.init_app(app)
@@ -230,4 +231,4 @@ def settings():
 if __name__ == '__main__':
     bind = system_config.dashboard.get("bind_address", "127.0.0.1")
     port = system_config.dashboard.get("port", 8420)
-    app.run(host=bind, port=port, debug=True)
+    app.run(host=bind, port=port, debug=False)

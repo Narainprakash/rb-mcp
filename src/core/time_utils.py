@@ -1,15 +1,15 @@
 from datetime import datetime, time, timedelta
 import pytz
 import exchange_calendars as xcals
-from src.core.config import config
+from src.core.config import system_config
 
-NY_TZ = pytz.timezone(config.polling.get("timezone", "America/New_York"))
+NY_TZ = pytz.timezone(system_config.polling.get("timezone", "America/New_York"))
 
 def get_ny_time():
     return datetime.now(NY_TZ)
 
 def is_market_open_today():
-    if not config.polling.get("skip_market_holidays", True):
+    if not system_config.polling.get("skip_market_holidays", True):
         return True
     
     try:
@@ -23,7 +23,7 @@ def is_market_open_today():
 def get_current_polling_interval():
     now = datetime.now(NY_TZ).time()
     
-    windows = config.polling.get("windows", [])
+    windows = system_config.polling.get("windows", [])
     for window in windows:
         start_time = datetime.strptime(window["start"], "%H:%M").time()
         end_time = datetime.strptime(window["end"], "%H:%M").time()

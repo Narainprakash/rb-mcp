@@ -173,7 +173,7 @@ def start_poller():
                         if signal.parse_status == "needs_review":
                             notify_review_needed(tweet.text)
                         elif signal.action == "BTO":
-                            notify_alert(signal.action, signal.ticker, signal.expiry, signal.strike, signal.option_type, signal.price, signal.trade_style)
+                            notify_alert(signal.ticker, signal.expiry, signal.strike, signal.option_type, signal.price, signal.trade_style, signal.action)
                             forward_raw_tweet(tweet.text)
                         elif signal.action == "ADD":
                             notify_add(signal.ticker, signal.expiry, signal.strike, signal.option_type, signal.price)

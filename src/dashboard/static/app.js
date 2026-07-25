@@ -1,3 +1,13 @@
+function escapeHtml(str) {
+    if (str === null || str === undefined) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
 document.addEventListener("DOMContentLoaded", () => {
     fetchHealth();
     fetchStats();
@@ -274,9 +284,9 @@ async function fetchFeed() {
             
             let body = "Processing...";
             if (item.parse_status !== 'success') {
-                body = item.raw_text ? item.raw_text.substring(0, 100) + '...' : "No text available";
+                body = item.raw_text ? escapeHtml(item.raw_text.substring(0, 100)) + '...' : "No text available";
             } else if (item.reasoning) {
-                body = `Decision: ${item.action_taken.toUpperCase()} - ${item.reasoning}`;
+                body = `Decision: ${item.action_taken.toUpperCase()} - ${escapeHtml(item.reasoning)}`;
             }
             if (item.trade_status) {
                 const mode = item.paper_mode ? "(Paper)" : "(LIVE)";
@@ -338,7 +348,7 @@ async function fetchFailures() {
             const timeStr = alert.timestamp.split(' ')[1].substring(0, 5);
             tr.innerHTML = `
                 <td>${timeStr}</td>
-                <td style="color:var(--accent-orange); font-size:0.8rem;">${alert.raw_text.substring(0, 50)}...</td>
+                <td style="color:var(--accent-orange); font-size:0.8rem;">${escapeHtml(alert.raw_text.substring(0, 50))}...</td>
             `;
             tbody.appendChild(tr);
         });
@@ -367,8 +377,8 @@ async function fetchEvents() {
             
             div.innerHTML = `
                 <div class="feed-time">${timeStr} ET</div>
-                <div class="feed-header">${event.event_type}</div>
-                <div class="feed-body">${event.message}</div>
+                <div class="feed-header">${escapeHtml(event.event_type)}</div>
+                <div class="feed-body">${escapeHtml(event.message)}</div>
             `;
             container.appendChild(div);
         });

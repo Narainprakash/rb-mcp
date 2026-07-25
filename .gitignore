@@ -9,6 +9,7 @@ config.yaml
 
 # Database
 hermes.db
+hermes_mt.db
 *.sqlite3
 
 # Python Virtual Environment

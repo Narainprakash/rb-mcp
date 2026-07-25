@@ -19,7 +19,7 @@ import sqlite3
 import json
 
 # Adjust this path based on where the Hermes Agent is running relative to this project
-DB_PATH = os.path.abspath(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'hermes.db'))
+DB_PATH = os.path.abspath(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'hermes_mt.db'))
 HALT_FILE = os.path.abspath(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'HALT'))
 
 def dict_factory(cursor, row):
