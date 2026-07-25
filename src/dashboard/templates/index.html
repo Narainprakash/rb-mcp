@@ -232,9 +232,28 @@
             <p style="color:var(--text-secondary); margin-bottom: 1rem; font-size: 0.9rem;">Edit your risk limits and trading preferences.</p>
             
             <form id="settings-form" style="display: flex; flex-direction: column; gap: 1rem; color: #fff;">
-                <div style="margin-bottom: 0.5rem; padding-bottom: 1rem; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 0.85rem; color: var(--text-secondary);">
-                    Paper/live mode is set in <code>config.yaml</code> and requires a service restart.
-                    Limits below are capped at the system ceilings.
+                <div style="margin-bottom: 0.5rem; padding-bottom: 1rem; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <input type="checkbox" id="set_paper_mode" style="width:18px; height:18px;">
+                        <label for="set_paper_mode"
+                               title="On: orders are simulated and no money moves. Off: real orders are sent to your Robinhood agentic account. Turning this off requires typing LIVE to confirm, and notifies you on Discord/WhatsApp."
+                               style="font-weight: bold; color: #4ade80; cursor: help; border-bottom: 1px dotted rgba(255,255,255,0.3);">Paper trading (simulated orders)</label>
+                    </div>
+
+                    <div id="live-confirm-block" style="display:none; margin-top: 0.85rem; padding: 0.75rem; border: 1px solid var(--accent-red); border-radius: 4px; background: rgba(239,68,68,0.08);">
+                        <div style="color: var(--accent-red); font-weight: bold; font-size: 0.85rem; margin-bottom: 0.5rem;">
+                            ⚠️ This enables LIVE trading with real money.
+                        </div>
+                        <div style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.5rem;">
+                            You are responsible for every order the agent places. Type <strong>LIVE</strong> to confirm.
+                        </div>
+                        <input type="text" id="live-confirm-input" placeholder="Type LIVE" autocomplete="off"
+                               style="padding: 0.5rem; width: 100%; background: rgba(0,0,0,0.3); color: white; border: 1px solid var(--accent-red); border-radius: 4px;">
+                    </div>
+
+                    <div style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.6rem;">
+                        Limits below are capped at the system ceilings.
+                    </div>
                 </div>
                 
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
@@ -295,9 +314,17 @@
                 </div>
 
                 <div style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 1rem; display: flex; flex-direction: column; gap: 0.75rem;">
-                    <div style="display: flex; align-items: center; gap: 0.5rem;" title="Uncheck to stop opening new positions. Open positions are still monitored and exited.">
-                        <input type="checkbox" id="set_trading_enabled" style="width:18px; height:18px;">
-                        <label for="set_trading_enabled" style="font-weight: bold; color: #4ade80; cursor: pointer;">Trading enabled (new entries)</label>
+                    <div style="display: flex; flex-direction: column; gap: 0.3rem;">
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <input type="checkbox" id="set_trading_enabled" style="width:18px; height:18px;">
+                            <label for="set_trading_enabled"
+                                   title="A soft pause, separate from the HALT kill switch. Unchecked: no new positions are opened, but existing positions keep being monitored and their take-profit / 0DTE exits still fire. The HALT file stops exits too, which is riskier while you are holding contracts."
+                                   style="font-weight: bold; color: #4ade80; cursor: help; border-bottom: 1px dotted rgba(255,255,255,0.3);">Trading enabled (new entries)</label>
+                        </div>
+                        <div style="font-size: 0.78rem; color: var(--text-secondary); padding-left: 1.6rem;">
+                            Uncheck to pause new entries while still managing open positions and their exits.
+                            Unlike the <code>HALT</code> kill switch, this does not stop exit handling.
+                        </div>
                     </div>
                     <div style="display: flex; flex-direction: column;" title="Signals tagged with any checked style are skipped.">
                         <label style="font-size: 0.85rem; margin-bottom: 0.4rem;">Skip trade styles</label>

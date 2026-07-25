@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 from src.core.db import get_connection, log_system_event
 from src.core.config import get_user_config, system_config
+from src.services.notifier import notify_mode_change
 
 app = Flask(__name__)
 def _resolve_secret_key():
@@ -33,6 +34,16 @@ def _resolve_secret_key():
         conn = get_connection()
         try:
             cursor = conn.cursor()
+            # The dashboard does not run init_db(), and systemd gives no ordering
+            # guarantee against rb-mcp on boot. Create the table if we got here
+            # first, so the key persists rather than silently going random.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS system_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT,
+                    updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
+                )
+            """)
             row = cursor.execute(
                 "SELECT value FROM system_state WHERE key = 'dashboard_secret_key'"
             ).fetchone()
@@ -337,16 +348,22 @@ def parse_failures():
 def settings():
     if request.method == 'GET':
         row = query_db("SELECT config_json FROM user_configs WHERE user_id = ?", (current_user.id,), one=True)
-        if row:
-            return jsonify(json.loads(row['config_json']))
-        return jsonify({})
+        stored = json.loads(row['config_json']) if row else {}
+        # Surface the *effective* paper_mode, so the toggle reflects reality even
+        # when the user has no stored override and the value comes from config.yaml.
+        effective = get_user_config(current_user.id)
+        stored.setdefault('execution', {})['paper_mode'] = effective.execution.get('paper_mode', True)
+        return jsonify(stored)
     else:
-        # Spec 7.3: the dashboard is a read-only view and must not become a
-        # second path to live trading. So the web UI may only tune the decision
-        # knobs below, and only in the safe direction - risk limits are clamped
-        # to the system ceilings in config.yaml, never raised above them.
-        # paper_mode is deliberately not settable here; flipping to live is a
-        # config.yaml edit plus a service restart.
+        # Spec 7.3: the dashboard must not become a casual path to live trading.
+        # The web UI may only tune the decision knobs below, and only in the safe
+        # direction - risk limits are clamped to the system ceilings in
+        # config.yaml, never raised above them.
+        #
+        # paper_mode IS settable, but only behind a typed confirmation, and every
+        # change is written to system_events and pushed to Discord/WhatsApp. The
+        # goal is that enabling live trading can never be a stray click, and can
+        # never happen without you hearing about it.
         incoming = request.json or {}
         incoming_decision = incoming.get('decision') or {}
         system_decision = system_config.settings.get('decision', {})
@@ -402,19 +419,52 @@ def settings():
                     continue
             clamped[key] = values
 
+        # Paper/live mode. Only a genuine change is acted on, and switching *to*
+        # live requires typing LIVE. Switching back to paper is the safe
+        # direction and needs no confirmation.
+        incoming_execution = incoming.get('execution') or {}
+        mode_change_to_paper = None
+        if 'paper_mode' in incoming_execution:
+            requested_paper = bool(incoming_execution['paper_mode'])
+            current_paper = get_user_config(current_user.id).execution.get('paper_mode', True)
+            if requested_paper != current_paper:
+                confirmation = str(incoming.get('confirm') or '').strip().upper()
+                if not requested_paper and confirmation != 'LIVE':
+                    errors.append("Switching to live trading requires typing LIVE to confirm")
+                else:
+                    mode_change_to_paper = requested_paper
+
         if errors:
             return jsonify({"status": "error", "errors": errors}), 400
 
         row = query_db("SELECT config_json FROM user_configs WHERE user_id = ?", (current_user.id,), one=True)
         stored = json.loads(row['config_json']) if row else {}
         stored.setdefault('decision', {}).update(clamped)
+        if mode_change_to_paper is not None:
+            stored.setdefault('execution', {})['paper_mode'] = mode_change_to_paper
 
         query_db("""
             INSERT INTO user_configs (user_id, config_json)
             VALUES (?, ?)
             ON CONFLICT(user_id) DO UPDATE SET config_json=excluded.config_json, updated_at=datetime('now', 'localtime')
         """, (current_user.id, json.dumps(stored)))
-        return jsonify({"status": "success", "applied": clamped})
+
+        # Audit and announce a mode change only after it is durably stored.
+        if mode_change_to_paper is not None:
+            going_live = not mode_change_to_paper
+            detail = (f"Trading mode set to {'PAPER' if mode_change_to_paper else 'LIVE'} "
+                      f"by {current_user.username} from {request.remote_addr}")
+            log_system_event('mode_change', detail, user_id=int(current_user.id))
+            try:
+                notify_mode_change(int(current_user.id), going_live, current_user.username)
+            except Exception as e:
+                print(f"Failed to send mode-change notification: {e}")
+
+        return jsonify({
+            "status": "success",
+            "applied": clamped,
+            "paper_mode": mode_change_to_paper if mode_change_to_paper is not None else None
+        })
 
 if __name__ == '__main__':
     bind = system_config.dashboard.get("bind_address", "127.0.0.1")

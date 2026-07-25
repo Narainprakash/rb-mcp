@@ -459,6 +459,13 @@ You should see the `robinhood` MCP server listed and its status. You can also te
 
 ### 4.4 Switch from Paper Mode to Live Mode
 
+You can flip the mode two ways. Both are audited.
+
+**From the dashboard** (Settings → uncheck *Paper trading*): you must type `LIVE` to confirm. The change is written to `system_events` with your username and source IP, and a notification is pushed to Discord and WhatsApp that **cannot be muted** via `events_enabled` — so if the switch is ever flipped without you, you hear about it. Switching back to paper needs no confirmation; that direction is always safe. This takes effect on the next trade-loop pass, no restart needed.
+
+**From `config.yaml`** (below) — sets the system-wide default rather than a per-user override, and needs a restart.
+
+
 > **⚠️ CURRENT LIMITATION**: `src/services/executor.py` does not yet call the Robinhood MCP tool, and no order-placement call is wired in. If you set `paper_mode: false`, the Executor detects this, logs an error/notification, and automatically forces the trade back into paper mode as a fail-safe rather than pretending to place a real order. **No trades will actually execute live until this MCP wiring is implemented in the Executor.** The steps below describe the intended flow once that integration lands.
 >
 > **Paper-mode results are not strategy validation.** `get_live_quote()` is a deterministic simulator anchored to the alert price, not market data. Paper runs exercise the full pipeline — parse, decide, position ledger, take-profit, exit — which is genuinely useful for catching logic bugs, but the resulting P/L and win rate say nothing about how the strategy would have done on real prices. Treat the 1–2 week paper period in Section 4 as a plumbing test until real MCP quotes are wired in.
@@ -670,12 +677,13 @@ Editable from the dashboard settings modal, stored per user in `user_configs`:
 | Contracts per signal, Max open positions, Price tolerance, Max daily/per-trade/per-position spend, Risk per signal | Exposure | Capped at the `config.yaml` ceiling — the UI can only tighten |
 | Take profit %, Limit buy discount % | Exit target / entry patience | Range-checked 0–100, not capped (higher is more conservative) |
 | Max daily loss, Max signal age | Loss and staleness guards | Validated only; lowering tightens risk |
-| Trading enabled | Soft pause — stops new entries, keeps managing exits | Boolean |
+| Trading enabled | Soft pause — stops opening new positions while open ones keep being monitored and exited. Unlike the `HALT` kill switch, exit handling continues | Boolean |
+| Paper trading | Simulated vs real orders | Switching **to live** requires typing `LIVE`; audited to `system_events` and notified un-mutably |
 | Sizing mode | `contracts` (fixed count) or `dollars` (budget-derived) | Must be one of the two |
 | Skip trade styles | Opt out of `0DTE`, `SWING`, `DAYTRADE`, `LOTTO` | Validated against known styles |
 | Allowed / blocked tickers | Restrict the tradeable universe | Uppercased; empty allow list means all |
 
-**Not user-settable, by design:** `paper_mode` (going live is a `config.yaml` edit plus a restart), and anything touching the shared X poll — cadence, windows, `target_account`, `include_retweets`, quota thresholds. All users share one monthly API quota, so one user changing the cadence would spend everyone else's budget.
+**Not user-settable, by design:** anything touching the shared X poll — cadence, windows, `target_account`, `include_retweets`, quota thresholds. All users share one monthly API quota, so one user changing the cadence would spend everyone else's budget.
 
 ### 9.4 ⚠️ Per-user Robinhood routing is not implemented
 `users.robinhood_account_id` exists and is read when a live order is attempted, but there is no Robinhood MCP call to route it to yet (see the warning in Section 4.4). Until that lands, all users would share whichever single account the MCP session is authenticated against.

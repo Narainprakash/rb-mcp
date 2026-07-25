@@ -85,6 +85,9 @@ notifications:
     - limit_sell_filled    # Sent when your take-profit order hits and P/L is secured
     - kill_switch          # CRITICAL: Sent if the HALT file is created (manually or via circuit breaker)
     - error                # CRITICAL: Sent on system/execution errors
+    # NOTE: paper/live mode changes are always sent, regardless of this list.
+    # Enabling live trading is the highest-consequence change in the system,
+    # so it is deliberately not something you can mute.
   # discord_webhook_url: ""              # Optional per-user override. Set this in a user's own config (via the
                                           # user_configs table) so tenants don't share one Discord channel.
                                           # Falls back to the system-wide DISCORD_WEBHOOK_URL in .env.

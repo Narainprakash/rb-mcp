@@ -25,6 +25,18 @@ document.addEventListener("DOMContentLoaded", () => {
     const settingsSave = document.getElementById('settings-save');
     
     let currentSettings = {};
+    // Paper mode as it was when the modal opened, so we only prompt for
+    // confirmation on an actual paper -> live transition.
+    let paperModeAtOpen = true;
+
+    const paperModeBox = document.getElementById('set_paper_mode');
+    if (paperModeBox) {
+        paperModeBox.addEventListener('change', () => {
+            const goingLive = paperModeAtOpen && !paperModeBox.checked;
+            document.getElementById('live-confirm-block').style.display = goingLive ? 'block' : 'none';
+            if (!goingLive) document.getElementById('live-confirm-input').value = '';
+        });
+    }
 
     if (settingsBtn) {
         settingsBtn.addEventListener('click', async () => {
@@ -34,6 +46,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 
                 // Populate UI
                 const d = currentSettings.decision ?? {};
+                // Effective value, supplied by the server even when unset locally.
+                paperModeAtOpen = currentSettings.execution?.paper_mode ?? true;
+                document.getElementById('set_paper_mode').checked = paperModeAtOpen;
+                document.getElementById('live-confirm-input').value = '';
+                document.getElementById('live-confirm-block').style.display = 'none';
                 document.getElementById('set_contracts_per_signal').value = d.contracts_per_signal ?? 1;
                 document.getElementById('set_take_profit_pct').value = d.take_profit_pct ?? 20;
                 document.getElementById('set_price_tolerance_pct').value = d.price_tolerance_pct ?? 10;
@@ -101,17 +118,31 @@ document.addEventListener("DOMContentLoaded", () => {
                 dec.allowed_tickers = parseTickers('set_allowed_tickers');
                 dec.blocked_tickers = parseTickers('set_blocked_tickers');
 
+                if (!currentSettings.execution) currentSettings.execution = {};
+                currentSettings.execution.paper_mode = paperModeBox.checked;
+                currentSettings.confirm = document.getElementById('live-confirm-input').value;
+
                 const res = await fetch('/api/settings', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(currentSettings)
                 });
-                
+                const body = await res.json().catch(() => ({}));
+
                 if (res.ok) {
                     settingsModal.style.display = 'none';
-                    alert("Settings saved successfully.");
+                    if (body.paper_mode === false) {
+                        alert("LIVE TRADING ENABLED. Real orders will be placed. A notification has been sent.");
+                    } else if (body.paper_mode === true) {
+                        alert("Paper mode restored. Orders are simulated again.");
+                    } else {
+                        alert("Settings saved successfully.");
+                    }
+                    fetchHealth();
                 } else {
-                    alert("Failed to save settings.");
+                    // Surface the server's reasons - the live confirmation is
+                    // unusable if a rejection just says "failed".
+                    alert((body.errors || ["Failed to save settings."]).join("\n"));
                 }
             } catch (e) {
                 console.error("Save error", e);

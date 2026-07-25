@@ -253,6 +253,85 @@ def test_daily_loss_limit_pauses_entries(user_db):
     assert "loss limit" in reason
 
 
+# --- Dashboard: live-mode confirmation gate --------------------------------
+
+@pytest.fixture
+def dash_client(tmp_path, monkeypatch):
+    import src.core.db as core_db
+
+    monkeypatch.setattr(core_db, "DB_PATH", str(tmp_path / "d.db"))
+    core_db.init_db()
+    conn = core_db.get_connection()
+    conn.execute("INSERT INTO users (username, password_hash, is_active) VALUES ('admin','h',1)")
+    conn.commit()
+    conn.close()
+
+    import src.dashboard.app as dash
+    dash.app.config["TESTING"] = True
+    client = dash.app.test_client()
+    with client.session_transaction() as session:
+        session["_user_id"] = "1"
+        session["_fresh"] = True
+    return client, dash
+
+
+def test_going_live_requires_typed_confirmation(dash_client, monkeypatch):
+    client, dash = dash_client
+    monkeypatch.setattr(dash, "notify_mode_change", lambda *a: None)
+
+    res = client.post("/api/settings", json={"execution": {"paper_mode": False}})
+    assert res.status_code == 400
+    assert "LIVE" in res.get_json()["errors"][0]
+
+    # And nothing was persisted.
+    res = client.get("/api/settings")
+    assert res.get_json()["execution"]["paper_mode"] is True
+
+
+def test_going_live_with_confirmation_audits_and_notifies(dash_client, monkeypatch):
+    import src.core.db as core_db
+
+    client, dash = dash_client
+    sent = []
+    monkeypatch.setattr(dash, "notify_mode_change", lambda *a: sent.append(a))
+
+    res = client.post("/api/settings", json={"execution": {"paper_mode": False}, "confirm": "LIVE"})
+    assert res.status_code == 200
+    assert res.get_json()["paper_mode"] is False
+    assert sent and sent[0][1] is True  # going_live=True
+
+    conn = core_db.get_connection()
+    try:
+        row = conn.execute(
+            "SELECT message FROM system_events WHERE event_type = 'mode_change'"
+        ).fetchone()
+        assert row is not None and "LIVE" in row["message"]
+    finally:
+        conn.close()
+
+
+def test_returning_to_paper_needs_no_confirmation(dash_client, monkeypatch):
+    client, dash = dash_client
+    monkeypatch.setattr(dash, "notify_mode_change", lambda *a: None)
+
+    client.post("/api/settings", json={"execution": {"paper_mode": False}, "confirm": "LIVE"})
+    res = client.post("/api/settings", json={"execution": {"paper_mode": True}})
+    assert res.status_code == 200
+    assert res.get_json()["paper_mode"] is True
+
+
+def test_unchanged_mode_is_not_reported_as_a_change(dash_client, monkeypatch):
+    client, dash = dash_client
+    sent = []
+    monkeypatch.setattr(dash, "notify_mode_change", lambda *a: sent.append(a))
+
+    res = client.post("/api/settings", json={"execution": {"paper_mode": True},
+                                             "decision": {"take_profit_pct": 25}})
+    assert res.status_code == 200
+    assert res.get_json()["paper_mode"] is None
+    assert sent == []
+
+
 # --- Ops: backups ----------------------------------------------------------
 
 def test_backup_is_consistent_under_an_open_write(tmp_path, monkeypatch):

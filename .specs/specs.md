@@ -276,6 +276,8 @@ Send to your `@benkiproject` Discord (either a channel named `benkiproject` or t
 | Trade skipped | `SKIPPED — ask 2.15 exceeds 1.99 (+10% tolerance)` |
 | Trade skipped (risk limit) | `SKIPPED — estimated spend $5100.00 would exceed daily max` |
 | Kill switch engaged | `KILL SWITCH ACTIVE — all trading halted` |
+| Live mode enabled | `LIVE TRADING ENABLED — by admin. Real orders will be placed...` |
+| Paper mode restored | `PAPER MODE RESTORED — by admin. Orders are simulated again.` |
 | System error | `ERROR — [component] — [message]` |
 
 **Formatting**: All monetary values (prices, targets, P/L) must be formatted to two decimal places (e.g., `$1.50` instead of `$1.5`) to ensure professional readability. Signed values must carry their **real** sign — never a hardcoded `+` — or a loss renders as `(+-25.00%)`. Losses are routine here: the 0DTE market-sell path at 15:50 exists precisely to exit below cost.
@@ -323,7 +325,8 @@ Config: webhook URL, per-event-type on/off toggles, and a rate limit (so a burst
   3. Add **Cloudflare Access** (zero-trust) as the auth layer — email OTP or SSO, no passwords to manage.
   4. Alternatively, if you don't have a domain: use HTTP Basic Auth over a WireGuard/Tailscale VPN.
 - Do **not** expose the dashboard port directly via VPS firewall rules — no open ports beyond SSH.
-- `POST /api/settings` is the one write path, and it is deliberately narrow. It accepts **only** the `decision` keys listed below and ignores everything else, so the web UI can never flip `paper_mode` or touch any `execution` setting — going live stays a `config.yaml` edit plus a service restart.
+- `POST /api/settings` is the one write path, and it is deliberately narrow. It accepts **only** the `decision` keys listed below plus `execution.paper_mode`, and ignores everything else.
+- **Paper → live is gated.** Switching to live requires the literal string `LIVE` in the request's `confirm` field; without it the request is rejected 400 and nothing is stored. The reverse direction (live → paper) is the safe one and needs no confirmation. Every actual change is written to `system_events` as `mode_change` — recording the username and source IP — and pushed to Discord and WhatsApp with `force=True`, bypassing `events_enabled` so it cannot be muted. The intent is that enabling live trading can never be a stray click, and can never happen without the account owner hearing about it.
   - Capped at the `config.yaml` value (raising these increases exposure, so the UI can only tighten): `contracts_per_signal`, `price_tolerance_pct`, `max_daily_spend_usd`, `max_open_positions`, `per_trade_max_spend_usd`, `max_spend_per_position_usd`, `risk_per_signal_usd`.
   - Range-checked to 0–100 but not capped (raising these is the *more* conservative choice): `take_profit_pct`, `limit_buy_discount_pct`.
   - Validated but uncapped, because lowering them tightens risk: `max_signal_age_sec`, `max_daily_loss_usd`.

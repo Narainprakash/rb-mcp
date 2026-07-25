@@ -16,15 +16,18 @@ def get_active_user_ids():
     finally:
         conn.close()
 
-def send_discord_message(user_id: int, event_type: str, message: str):
+def send_discord_message(user_id: int, event_type: str, message: str, force: bool = False):
     """
     Sends a message to the user's Discord webhook if the event_type is enabled.
     Each user may set their own notifications.discord_webhook_url so tenants
     don't share a channel; the system-wide DISCORD_WEBHOOK_URL is the fallback.
+
+    `force` bypasses the per-event toggles, for events you must not be able to
+    opt out of (see notify_mode_change).
     """
     config = get_user_config(user_id)
     enabled_events = config.notifications.get('events_enabled', [])
-    if event_type not in enabled_events:
+    if not force and event_type not in enabled_events:
         return # Event type not enabled for notification
 
     webhook_url = config.notifications.get('discord_webhook_url') or system_config.discord_webhook_url
@@ -41,14 +44,16 @@ def send_discord_message(user_id: int, event_type: str, message: str):
     except Exception as e:
         print(f"Failed to send Discord notification for User {user_id}: {e}")
 
-def send_whatsapp_message(user_id: int, event_type: str, message: str):
+def send_whatsapp_message(user_id: int, event_type: str, message: str, force: bool = False):
     """
     Sends a message via the local Hermes WhatsApp bridge using the 'hermes send' CLI
     to all configured whatsapp_trade_targets for this user.
+
+    `force` bypasses the per-event toggles - see notify_mode_change.
     """
     config = get_user_config(user_id)
     enabled_events = config.notifications.get('events_enabled', [])
-    if event_type not in enabled_events:
+    if not force and event_type not in enabled_events:
         return # Event type not enabled for notification
         
     targets = config.notifications.get('whatsapp_trade_targets', ["whatsapp"])
@@ -126,6 +131,22 @@ def notify_skipped(user_id: int, reason: str):
     msg = f"SKIPPED — {reason}"
     send_discord_message(user_id, "skipped", msg)
     send_whatsapp_message(user_id, "skipped", msg)
+
+def notify_mode_change(user_id: int, going_live: bool, actor: str):
+    """Announces a paper/live switch.
+
+    Sent with force=True, deliberately ignoring events_enabled: enabling live
+    trading is the highest-consequence change in the system, and you want to
+    hear about it even if you never subscribed to the event - especially if
+    someone other than you made it.
+    """
+    if going_live:
+        msg = (f"LIVE TRADING ENABLED — by {actor}. Real orders will be placed "
+               f"against your Robinhood agentic account.")
+    else:
+        msg = f"PAPER MODE RESTORED — by {actor}. Orders are simulated again."
+    send_discord_message(user_id, "mode_change", msg, force=True)
+    send_whatsapp_message(user_id, "mode_change", msg, force=True)
 
 def notify_kill_switch():
     """Global kill switch notification."""
