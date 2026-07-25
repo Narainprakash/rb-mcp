@@ -3,7 +3,7 @@
 Hermes is a self-hosted agent that polls an X (Twitter) account for options trading signals, parses them with zero latency using regex, applies predefined risk management and sizing rules, and automatically executes them via Robinhood's Agentic Trading MCP.
 
 ## Features
-- **Multi-Tenant Architecture**: Supports multiple users in a single instance, each with their own Robinhood MCP account, risk settings, and personalized dashboard login.
+- **Multi-Tenant Architecture**: Supports multiple users in a single instance, each with their own risk settings, notification routing, and dashboard login — all fed by one shared X poll, so adding users costs no extra Twitter API quota. See [Section 9](#9-multi-user-setup) for what is and isn't wired up yet (per-user Robinhood routing is **not**).
 - **Zero-Latency Parsing**: Uses pure regex to parse highly structured signals, completely avoiding LLM latency and cost.
 - **Strict Risk Controls**: Enforces maximum daily spend, per-trade limits, per-position limits, and maximum open positions per user.
 - **Discount Limit Buys**: If the live market ask is cheaper than the alert price, the bot places a limit buy order at a configurable discount (e.g., 20% lower) to catch dips, rather than buying at market.
@@ -12,6 +12,7 @@ Hermes is a self-hosted agent that polls an X (Twitter) account for options trad
 - **Hard Kill Switch**: An instant global kill switch via a simple `HALT` file presence check that immediately stops all trading.
 - **Circuit Breaker**: Automatically engages the kill switch after N consecutive execution errors (default 3) to prevent runaway failures.
 - **Stale Order Cleanup**: Automatically cancels unfilled limit buy orders after 24 hours to prevent orphaned orders.
+- **Expiry Reconciliation**: Positions past their expiry are closed out as `expired` with the premium booked as a realized loss, so they can't silently occupy your `max_open_positions` slots forever.
 - **Daily Summary Push**: A configurable end-of-day report (P/L, Trades, Alerts, Open Positions, API Calls) sent via WhatsApp/Telegram to each user.
 
 ---
@@ -145,6 +146,7 @@ To resume operations, simply remove the file:
 ```bash
 rm /home/rb-mcp-user/rb-mcp/HALT
 ```
+The loops re-check for the file every few seconds, so trading resumes within seconds of removing it — no service restart needed. The kill switch is global: it halts every user, by design.
 
 ### Step 2.5.1: Wiping the Database (Optional)
 If you ever want to perform a "clean slate" reset before a new trading day, you can safely delete the SQLite database. The system will automatically generate a pristine database file with the correct schema on its next startup:
@@ -369,7 +371,9 @@ You should see the `robinhood` MCP server listed and its status. You can also te
 
 ### 4.4 Switch from Paper Mode to Live Mode
 
-> **⚠️ CURRENT LIMITATION**: `src/services/executor.py` does not yet call the Robinhood MCP tool — its `get_live_quote()` is still a local mock, and no order-placement call is wired in. If you set `paper_mode: false`, the Executor detects this, logs an error/notification, and automatically forces the trade back into paper mode as a fail-safe rather than pretending to place a real order. **No trades will actually execute live until this MCP wiring is implemented in the Executor.** The steps below describe the intended flow once that integration lands.
+> **⚠️ CURRENT LIMITATION**: `src/services/executor.py` does not yet call the Robinhood MCP tool, and no order-placement call is wired in. If you set `paper_mode: false`, the Executor detects this, logs an error/notification, and automatically forces the trade back into paper mode as a fail-safe rather than pretending to place a real order. **No trades will actually execute live until this MCP wiring is implemented in the Executor.** The steps below describe the intended flow once that integration lands.
+>
+> **Paper-mode results are not strategy validation.** `get_live_quote()` is a deterministic simulator anchored to the alert price, not market data. Paper runs exercise the full pipeline — parse, decide, position ledger, take-profit, exit — which is genuinely useful for catching logic bugs, but the resulting P/L and win rate say nothing about how the strategy would have done on real prices. Treat the 1–2 week paper period in Section 4 as a plumbing test until real MCP quotes are wired in.
 
 Once you've verified the MCP connection is healthy:
 
@@ -497,6 +501,10 @@ The bot relies on a hidden file (`.since_id`) in the root directory to track its
 
 **The Safeguard:** To prevent this scenario, the poller is hardcoded to explicitly check the `tweet.created_at` timestamp. It compares the tweet's calendar date to the current calendar date (in New York Time). If a tweet is from a previous day, the bot will silently ignore it and advance its `.since_id` tracker. This ensures the bot will never trade an old tweet on its initial startup.
 
+**Retweets:** the same-day check alone is not enough, because a retweet of an old `#ALERT` carries *today's* timestamp. Retweets and quote-tweets are therefore skipped outright unless `polling.include_retweets: true`.
+
+**Duplicates:** already-seen tweets also advance `.since_id`. If they didn't, a batch of known tweets would leave the cursor pinned and the bot would re-request the same window on every poll, quietly burning the monthly API quota.
+
 ## 8. WhatsApp Routing & Forwarding
 
 The bot uses the Hermes Agent gateway (`hermes send`) to push notifications. You can configure exactly who receives trade execution receipts, and who receives the raw `#ALERT` tweet forwards.
@@ -528,3 +536,35 @@ summary:
   targets:
     - "whatsapp"
 ```
+
+Each user's summary is tracked separately, so users configured for different times all receive theirs.
+
+---
+
+## 9. Multi-User Setup
+
+Hermes polls **one** X account and fans the signals out to **N** independent trading accounts. Adding users costs no additional Twitter API quota.
+
+### 9.1 What is per-user
+Every user gets their own decisions, trades, positions, limit orders, risk limits, notification targets, circuit-breaker state, and daily summary. Per-user overrides live in the `user_configs` table as JSON and are merged over the `config.yaml` defaults:
+
+```bash
+sqlite3 hermes_mt.db "INSERT INTO user_configs (user_id, config_json) VALUES (2, '{\"decision\": {\"max_daily_spend_usd\": 500}, \"execution\": {\"paper_mode\": true}}');"
+```
+
+### 9.2 Give each user their own Discord channel
+Notifications fall back to the single system-wide `DISCORD_WEBHOOK_URL` in `.env`. With more than one user that means **everyone's fills and P/L land in the same channel**. Set a per-user webhook in that user's `user_configs` JSON:
+
+```json
+{ "notifications": { "discord_webhook_url": "https://discord.com/api/webhooks/..." } }
+```
+
+WhatsApp targets (`whatsapp_trade_targets`, `whatsapp_forward_targets`) are already per-user.
+
+### 9.3 Adding a user is safe with respect to history
+The trade loop only considers alerts from the current NY trading day, so a user added mid-month will **not** retroactively trade weeks of stale signals. They start from the next alert.
+
+### 9.4 ⚠️ Per-user Robinhood routing is not implemented
+`users.robinhood_account_id` exists and is read when a live order is attempted, but there is no Robinhood MCP call to route it to yet (see the warning in Section 4.4). Until that lands, all users would share whichever single account the MCP session is authenticated against.
+
+**Do not run more than one user with `paper_mode: false`.**

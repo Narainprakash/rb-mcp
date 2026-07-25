@@ -11,6 +11,8 @@ polling:
   target_account: "kttechprivate"        # The Twitter/X handle to poll for signals (without the @)
   monthly_api_call_ceiling: 10000        # Safeguard: Hard limit on Twitter API calls per month to avoid overage charges
   skip_market_holidays: true             # If true, the bot will sleep during weekends and NYSE holidays
+  include_retweets: false                # If false (default), retweets and quote-tweets are skipped. A retweet of an
+                                          # old #ALERT is timestamped today, so it would otherwise trade as a fresh signal.
 
 # ==========================================
 # Hermes Config: Decision Engine Settings
@@ -31,8 +33,10 @@ decision:
 execution:
   paper_mode: true                       # If true, simulates trades and fills. If false, connects to Robinhood MCP for live trading.
   robinhood_account_id: "<your_agentic_account_id>"  # Your specific Robinhood Agentic Account ID for live trading
-  error_circuit_breaker_count: 3         # If the Robinhood API returns this many consecutive errors, the bot automatically engages the kill switch
+  error_circuit_breaker_count: 3         # Consecutive execution errors *per user* before that user's failures engage the kill switch
   zero_dte_market_sell_cutoff: "15:50"   # Time (ET) to automatically market-sell open 0DTE limit sell orders to prevent worthless expiration
+  monitor_interval_sec: 15               # How often open orders are re-checked. Each pass quotes every open order for every
+                                          # user, so lowering this multiplies quote volume by (users x positions).
 
 # ==========================================
 # Hermes Config: Notification & Alerting
@@ -55,6 +59,9 @@ notifications:
     - limit_sell_filled    # Sent when your take-profit order hits and P/L is secured
     - kill_switch          # CRITICAL: Sent if the HALT file is created (manually or via circuit breaker)
     - error                # CRITICAL: Sent on system/execution errors
+  # discord_webhook_url: ""              # Optional per-user override. Set this in a user's own config (via the
+                                          # user_configs table) so tenants don't share one Discord channel.
+                                          # Falls back to the system-wide DISCORD_WEBHOOK_URL in .env.
   whatsapp_trade_targets:                # Contacts to receive trade receipts and errors
     - "whatsapp"
   whatsapp_forward_targets:              # Contacts to receive the forwarded raw text of the #ALERT tweet

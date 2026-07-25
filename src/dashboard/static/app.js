@@ -33,7 +33,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 currentSettings = await res.json();
                 
                 // Populate UI
-                document.getElementById('set_paper_mode').checked = currentSettings.execution?.paper_mode ?? true;
                 document.getElementById('set_contracts_per_signal').value = currentSettings.decision?.contracts_per_signal ?? 1;
                 document.getElementById('set_take_profit_pct').value = currentSettings.decision?.take_profit_pct ?? 20;
                 document.getElementById('set_price_tolerance_pct').value = currentSettings.decision?.price_tolerance_pct ?? 10;
@@ -58,11 +57,10 @@ document.addEventListener("DOMContentLoaded", () => {
     if (settingsSave) {
         settingsSave.addEventListener('click', async () => {
             try {
-                // Read from UI
-                if (!currentSettings.execution) currentSettings.execution = {};
+                // Read from UI. Only decision knobs are settable here; the server
+                // ignores anything else and clamps these to the system ceilings.
                 if (!currentSettings.decision) currentSettings.decision = {};
-                
-                currentSettings.execution.paper_mode = document.getElementById('set_paper_mode').checked;
+
                 currentSettings.decision.contracts_per_signal = parseInt(document.getElementById('set_contracts_per_signal').value) || 1;
                 currentSettings.decision.take_profit_pct = parseInt(document.getElementById('set_take_profit_pct').value) || 20;
                 currentSettings.decision.price_tolerance_pct = parseInt(document.getElementById('set_price_tolerance_pct').value) || 10;

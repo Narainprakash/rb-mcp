@@ -22,6 +22,30 @@ def process_open_orders():
         cursor = conn.cursor()
         
         # ---------------------------------------------------------
+        # 0. RECONCILE EXPIRED POSITIONS
+        # Options past their expiry can never fill their take-profit. Without
+        # this they stay 'open' forever, consuming max_open_positions and
+        # inflating capital-at-risk.
+        # ---------------------------------------------------------
+        cursor.execute("""
+            SELECT id, user_id, ticker, expiry, strike, option_type, total_quantity, average_cost
+            FROM positions WHERE status = 'open' AND expiry < ?
+        """, (today_str,))
+        for pos in cursor.fetchall():
+            realized = round(-pos['average_cost'] * pos['total_quantity'] * 100, 2)
+            cursor.execute("""
+                UPDATE limit_orders SET status = 'cancelled'
+                WHERE position_id = ? AND status = 'pending'
+            """, (pos['id'],))
+            cursor.execute("UPDATE positions SET status = 'expired' WHERE id = ?", (pos['id'],))
+            log_system_event(
+                'system',
+                f"Position #{pos['id']} {pos['ticker']} {pos['expiry']} {pos['strike']}{pos['option_type']} "
+                f"expired unsold; realized {realized:.2f}",
+                user_id=pos['user_id']
+            )
+
+        # ---------------------------------------------------------
         # 1. PROCESS LIMIT SELL ORDERS
         # ---------------------------------------------------------
         cursor.execute("""
@@ -45,7 +69,7 @@ def process_open_orders():
             # Check 0DTE Cutoff rule
             if is_0dte and current_time >= cutoff_time:
                 # Force Market Sell
-                quote = get_live_quote(order['ticker'], order['expiry'], order['strike'], order['option_type'])
+                quote = get_live_quote(order['ticker'], order['expiry'], order['strike'], order['option_type'], order['average_cost'])
                 fill_price = quote['bid'] # Market sell hits the bid
                 
                 pnl_dollars = round((fill_price - order['average_cost']) * order['total_quantity'] * 100, 2)
@@ -65,7 +89,7 @@ def process_open_orders():
                 
             # Check for limit fill (Paper Mode Simulation)
             if paper_mode:
-                quote = get_live_quote(order['ticker'], order['expiry'], order['strike'], order['option_type'])
+                quote = get_live_quote(order['ticker'], order['expiry'], order['strike'], order['option_type'], order['average_cost'])
                 if quote['bid'] >= order['target_price']:
                     # Simulate Fill
                     pnl_dollars = round((order['target_price'] - order['average_cost']) * order['total_quantity'] * 100, 2)
@@ -115,16 +139,18 @@ def process_open_orders():
 
             # Cancel stale non-0DTE limit buy orders older than 24 hours
             if order['created_at']:
-                created_dt = datetime.strptime(order['created_at'], "%Y-%m-%d %H:%M:%S")
-                # Use local datetime.now() because created_at is in 'localtime' (EST)
-                age_hours = (datetime.now() - created_dt).total_seconds() / 3600
+                # created_at is written with SQLite's 'localtime'. Interpret it in
+                # the configured market timezone rather than the VPS clock, which
+                # spec 2.1 warns may be UTC.
+                created_dt = NY_TZ.localize(datetime.strptime(order['created_at'], "%Y-%m-%d %H:%M:%S"))
+                age_hours = (now - created_dt).total_seconds() / 3600
                 if age_hours > 24:
                     cursor.execute("UPDATE limit_buy_orders SET status = 'cancelled' WHERE id = ?", (order['buy_id'],))
                     log_system_event('system', f"Cancelled stale limit buy order #{order['buy_id']} for {order['ticker']} (age: {age_hours:.1f}h)", user_id=user_id)
                     continue
 
             if paper_mode:
-                quote = get_live_quote(order['ticker'], order['expiry'], order['strike'], order['option_type'])
+                quote = get_live_quote(order['ticker'], order['expiry'], order['strike'], order['option_type'], order['target_price'])
                 # Buy order fills if ask drops to target price
                 if quote['ask'] <= order['target_price']:
                     # Import here to avoid circular imports if any

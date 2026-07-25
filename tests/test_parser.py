@@ -31,9 +31,11 @@ AVG: .98"""
     assert signal.price == 0.98
 
 def test_parse_0dte():
-    # For 0DTE, it should set expiry to today
-    tweet = """#ALERT
-BTO $QQQ 1/1 400P
+    # For 0DTE, the stated expiry must equal today (spec 3.2.5). A mismatched
+    # date is rejected instead - see test_regressions.py.
+    today = date.today()
+    tweet = f"""#ALERT
+BTO $QQQ {today.month}/{today.day} 400P
 2.50
 0DTE"""
     signal = parse_alert(tweet)

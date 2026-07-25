@@ -29,10 +29,18 @@ class ParsedSignal:
         }
 
 def infer_year(month, day, is_0dte):
+    """
+    Returns the ISO expiry date, or None if a 0DTE alert's stated date is not
+    today (the contract is then ambiguous and must not be traded).
+    """
     today = get_ny_time().date()
     if is_0dte:
+        # Spec 3.2.5: a 0DTE expiry must equal today. Validate rather than
+        # overwrite, so a typo or stale tweet can't silently retarget the trade.
+        if (month, day) != (today.month, today.day):
+            return None
         return f"{today.year}-{today.month:02d}-{today.day:02d}"
-    
+
     target_date = date(today.year, month, day)
     # If the date has passed by more than a few days, it's likely next year's expiry.
     # Expiries are usually Fridays. If they meant today but it's passed, that's tricky.
@@ -42,9 +50,12 @@ def infer_year(month, day, is_0dte):
     return f"{target_date.year}-{target_date.month:02d}-{target_date.day:02d}"
 
 def parse_alert(tweet_text: str) -> ParsedSignal:
+    # Spec 2.3: only tweets tagged #ALERT are signals. Everything else is
+    # ordinary account activity - recorded for audit, but not a parse failure
+    # and not something to notify on.
     if "#ALERT" not in tweet_text.upper():
-        return ParsedSignal(tweet_text)
-    
+        return ParsedSignal(tweet_text, parse_status="ignored")
+
     signal = ParsedSignal(tweet_text)
     
     # 1. Action
@@ -69,9 +80,14 @@ def parse_alert(tweet_text: str) -> ParsedSignal:
                 styles.append(style)
         signal.trade_style = ",".join(styles) if styles else None
         
-        # 5. Expiry (Year inference)
+        # 5. Expiry (Year inference). Returns None for an invalid calendar date
+        # or a 0DTE alert whose stated expiry isn't today; validation below then
+        # leaves the signal as needs_review.
         is_0dte = "0DTE" in (signal.trade_style or "")
-        signal.expiry = infer_year(month, day, is_0dte)
+        try:
+            signal.expiry = infer_year(month, day, is_0dte)
+        except ValueError:
+            signal.expiry = None
         
     # 3. Price
     if signal.action == "BTO":

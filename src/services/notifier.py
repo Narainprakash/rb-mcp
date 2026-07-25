@@ -14,23 +14,25 @@ def get_active_user_ids():
 
 def send_discord_message(user_id: int, event_type: str, message: str):
     """
-    Sends a message to the Discord webhook if the event_type is enabled in config.
-    Discord webhook is system-wide, but we check user's events_enabled.
+    Sends a message to the user's Discord webhook if the event_type is enabled.
+    Each user may set their own notifications.discord_webhook_url so tenants
+    don't share a channel; the system-wide DISCORD_WEBHOOK_URL is the fallback.
     """
-    if not system_config.discord_webhook_url:
-        return # Webhook not configured
-    
     config = get_user_config(user_id)
     enabled_events = config.notifications.get('events_enabled', [])
     if event_type not in enabled_events:
         return # Event type not enabled for notification
-        
+
+    webhook_url = config.notifications.get('discord_webhook_url') or system_config.discord_webhook_url
+    if not webhook_url:
+        return # Webhook not configured
+
     payload = {
-        "content": f"[User {user_id}] {message}"
+        "content": message
     }
-    
+
     try:
-        response = requests.post(system_config.discord_webhook_url, json=payload)
+        response = requests.post(webhook_url, json=payload)
         response.raise_for_status()
     except Exception as e:
         print(f"Failed to send Discord notification for User {user_id}: {e}")

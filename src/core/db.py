@@ -73,7 +73,8 @@ CREATE TABLE IF NOT EXISTS positions (
     option_type TEXT NOT NULL,
     total_quantity INTEGER DEFAULT 0,
     average_cost REAL DEFAULT 0.0,
-    status TEXT NOT NULL, -- 'open', 'closed'
+    status TEXT NOT NULL, -- 'open', 'closed', 'expired'
+    add_without_parent BOOLEAN DEFAULT 0, -- ADD alert with no matching open position
     updated_at DATETIME DEFAULT (datetime('now', 'localtime')),
     FOREIGN KEY(user_id) REFERENCES users(id)
 );
@@ -144,6 +145,13 @@ def init_db():
     conn = get_connection()
     cursor = conn.cursor()
     cursor.executescript(SCHEMA)
+
+    # Migrations for databases created before a column was added.
+    cursor.execute("PRAGMA table_info(positions)")
+    position_columns = {row['name'] for row in cursor.fetchall()}
+    if 'add_without_parent' not in position_columns:
+        cursor.execute("ALTER TABLE positions ADD COLUMN add_without_parent BOOLEAN DEFAULT 0")
+
     conn.commit()
     conn.close()
 

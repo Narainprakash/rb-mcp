@@ -23,6 +23,25 @@ login_manager.login_view = 'login'
 
 NY_TZ = pytz.timezone(system_config.polling.get("timezone", "America/New_York"))
 
+# Decision knobs the read-only dashboard is allowed to tune (spec 7.3).
+# paper_mode and all execution settings are intentionally excluded.
+#
+# Raising these increases exposure, so they are capped at the config.yaml value
+# and the UI can only ever tighten them.
+RISK_CEILING_KEYS = (
+    "contracts_per_signal",
+    "price_tolerance_pct",
+    "max_daily_spend_usd",
+    "max_open_positions",
+)
+# Raising these does not increase capital at risk (a higher profit target or a
+# deeper limit-buy discount is the more conservative choice), so they are only
+# range-checked, not capped at the system default.
+FREE_PCT_KEYS = ("take_profit_pct", "limit_buy_discount_pct")
+
+SETTABLE_DECISION_KEYS = RISK_CEILING_KEYS + FREE_PCT_KEYS
+INTEGER_DECISION_KEYS = ("contracts_per_signal", "max_open_positions")
+
 def dict_factory(cursor, row):
     d = {}
     for idx, col in enumerate(cursor.description):
@@ -220,13 +239,52 @@ def settings():
             return jsonify(json.loads(row['config_json']))
         return jsonify({})
     else:
-        new_config = request.json
+        # Spec 7.3: the dashboard is a read-only view and must not become a
+        # second path to live trading. So the web UI may only tune the decision
+        # knobs below, and only in the safe direction - risk limits are clamped
+        # to the system ceilings in config.yaml, never raised above them.
+        # paper_mode is deliberately not settable here; flipping to live is a
+        # config.yaml edit plus a service restart.
+        incoming = request.json or {}
+        incoming_decision = incoming.get('decision') or {}
+        system_decision = system_config.settings.get('decision', {})
+
+        clamped = {}
+        errors = []
+        for key in SETTABLE_DECISION_KEYS:
+            if key not in incoming_decision:
+                continue
+            try:
+                value = float(incoming_decision[key])
+            except (TypeError, ValueError):
+                errors.append(f"{key} must be a number")
+                continue
+            if value <= 0:
+                errors.append(f"{key} must be greater than zero")
+                continue
+            if key in FREE_PCT_KEYS:
+                if value > 100:
+                    errors.append(f"{key} must be between 0 and 100")
+                    continue
+            else:
+                ceiling = system_decision.get(key)
+                if ceiling is not None and value > ceiling:
+                    value = ceiling
+            clamped[key] = int(value) if key in INTEGER_DECISION_KEYS else value
+
+        if errors:
+            return jsonify({"status": "error", "errors": errors}), 400
+
+        row = query_db("SELECT config_json FROM user_configs WHERE user_id = ?", (current_user.id,), one=True)
+        stored = json.loads(row['config_json']) if row else {}
+        stored.setdefault('decision', {}).update(clamped)
+
         query_db("""
             INSERT INTO user_configs (user_id, config_json)
             VALUES (?, ?)
             ON CONFLICT(user_id) DO UPDATE SET config_json=excluded.config_json, updated_at=datetime('now', 'localtime')
-        """, (current_user.id, json.dumps(new_config)))
-        return jsonify({"status": "success"})
+        """, (current_user.id, json.dumps(stored)))
+        return jsonify({"status": "success", "applied": clamped})
 
 if __name__ == '__main__':
     bind = system_config.dashboard.get("bind_address", "127.0.0.1")

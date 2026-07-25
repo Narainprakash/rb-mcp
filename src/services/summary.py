@@ -70,8 +70,10 @@ def summary_loop():
     print("Starting Hermes Daily Summary Scheduler...")
     log_system_event('startup', 'Hermes Daily Summary Scheduler started')
     
-    last_sent_date = None
-    
+    # Tracked per user: a shared flag would let the earliest-scheduled user's
+    # send suppress every user configured for a later time.
+    last_sent_date = {}
+
     while True:
         try:
             now = datetime.now(NY_TZ)
@@ -86,7 +88,6 @@ def summary_loop():
             finally:
                 conn.close()
             
-            sent_for_users = False
             for user_row in active_users:
                 user_id = user_row['id']
                 config = get_user_config(user_id)
@@ -98,7 +99,7 @@ def summary_loop():
                 target_time = datetime.strptime(target_time_str, "%H:%M").time()
                 
                 # Check if it's past the target time and we haven't sent it today
-                if now.time() >= target_time and last_sent_date != current_date_str:
+                if now.time() >= target_time and last_sent_date.get(user_id) != current_date_str:
                     metrics = get_daily_metrics(user_id, current_date_str)
                     
                     # Format message
@@ -120,11 +121,9 @@ def summary_loop():
                     
                     send_summary_notification(user_id, summary_text)
                     log_system_event('system', f"Daily summary generated and sent for {current_date_str}", user_id=user_id)
-                    sent_for_users = True
-            
-            if sent_for_users:
-                last_sent_date = current_date_str
-                
+                    last_sent_date[user_id] = current_date_str
+
+
         except Exception as e:
             print(f"Error in summary loop: {e}")
             log_system_event('error', f"Summary loop error: {e}")

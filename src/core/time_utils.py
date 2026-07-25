@@ -8,12 +8,22 @@ NY_TZ = pytz.timezone(system_config.polling.get("timezone", "America/New_York"))
 def get_ny_time():
     return datetime.now(NY_TZ)
 
+_nyse_calendar = None
+
+def _get_nyse_calendar():
+    """Builds the NYSE calendar once. Construction is expensive (multi-decade
+    session index) and this is called on every poll pass."""
+    global _nyse_calendar
+    if _nyse_calendar is None:
+        _nyse_calendar = xcals.get_calendar("NYSE")
+    return _nyse_calendar
+
 def is_market_open_today():
     if not system_config.polling.get("skip_market_holidays", True):
         return True
-    
+
     try:
-        nyse = xcals.get_calendar("NYSE")
+        nyse = _get_nyse_calendar()
         today_str = datetime.now(NY_TZ).strftime("%Y-%m-%d")
         return nyse.is_session(today_str)
     except Exception as e:

@@ -111,16 +111,16 @@ All four windows and both cadences must be defined in a config file (Section 8),
 ### 2.2 Fetch Logic
 
 - Use the X API's user-timeline endpoint scoped to the single account, `since_id` cursor-based, so each poll only pulls new tweets rather than re-fetching the last N.
-- **IMPORTANT SAFEGUARD**: The bot relies on a hidden file (`.since_id`) to track its place. If that file is missing (like on the very first time the bot boots up), it defaults to pulling the 5 most recent tweets. If the account hasn't tweeted in a few days, those 5 tweets will be very old, but the bot could process them as if they are brand new and execute late trades! To prevent this, the poller explicitly checks `tweet.created_at` against the current calendar day and silently ignores any tweet from a previous day.
+- **IMPORTANT SAFEGUARD**: The bot relies on a hidden file (`.since_id`) to track its place. If that file is missing (like on the very first time the bot boots up), it defaults to pulling the 50 most recent tweets. If the account hasn't tweeted in a few days, those 5 tweets will be very old, but the bot could process them as if they are brand new and execute late trades! To prevent this, the poller explicitly checks `tweet.created_at` against the current calendar day and silently ignores any tweet from a previous day.
 - Persist the last-seen tweet ID to disk/DB so a service restart doesn't reprocess or skip tweets.
 - Track and log every API call (timestamp, endpoint) to the DB, per your requirement to see "twitter API calls" in the dashboard.
 - **Quota guardrail:** Track the monthly pull count. If it approaches the 10,000 limit, alert you via Discord and optionally degrade the polling cadence to avoid hitting the hard cap before month-end.
 
 ### 2.3 Filtering
 
-- Only process tweets containing `#ALERT` (case-insensitive).
-- Ignore retweets/quote-tweets unless explicitly enabled in config.
-- Deduplicate: if a poll overlaps and returns a tweet already logged, skip it (idempotent by tweet ID).
+- Only process tweets containing `#ALERT` (case-insensitive). Tweets without the tag are stored with `parse_status = 'ignored'` for audit and generate **no** notification — they are ordinary account activity, not parse failures.
+- Ignore retweets/quote-tweets unless `polling.include_retweets` is true. This matters because a retweet of an old alert carries **today's** timestamp, so the same-day `created_at` guard would not catch it.
+- Deduplicate: if a poll overlaps and returns a tweet already logged, skip it (idempotent by tweet ID). The `since_id` cursor is still advanced past duplicates — otherwise a batch of already-seen tweets pins the cursor and the same window is re-fetched every poll, burning quota.
 
 ---
 
@@ -155,7 +155,7 @@ The signal format is highly structured and consistent across all six sample twee
 4. **Extract Trade Style** (for logging only):
    - Scan the body for keywords: `0DTE`, `SWING`, `DAYTRADE`, `LOTTO`. These are informational tags, not used for trade decisions.
 5. **Year Inference for Expiry**:
-   - The tweet only gives `MM/DD`. Infer the year: if the date has already passed this year, it's next year. For `0DTE` alerts, the expiry must equal today's date — validate this.
+   - The tweet only gives `MM/DD`. Infer the year: if the date has already passed this year, it's next year. For `0DTE` alerts, the expiry must equal today's date — this is **validated, not overwritten**: a `0DTE` alert whose stated `MM/DD` is not today returns `needs_review` rather than silently retargeting the order to a different contract. Calendar-invalid dates (e.g. `13/45`) likewise fail to `needs_review`.
 6. **Validation & Fallback**: If the regex fails to extract all essential fields (action, ticker, expiry, strike, option_type, price), the parser must:
    - Log the raw tweet and the failure reason.
    - Send a Discord notification tagged `REVIEW NEEDED`.
@@ -229,7 +229,13 @@ Every decision (buy / skip / needs-review) is logged with the reasoning fields (
 - **Limit sell monitoring**: During active polling windows, check the status of all open limit sell orders. When filled, log realized P/L and notify via Discord. **In paper mode**: the monitor must poll the live market bid price and simulate a fill when the bid crosses the `target_sell_price`.
 - Idempotency: each decision should carry a unique ID; the Executor must not double-submit if retried after a timeout.
 
-**Implementation status (as of 2026-07-24):** `src/services/executor.py` does not yet call the real Robinhood Agentic Trading MCP — `get_live_quote()` is a local mock that returns a randomized bid/ask, and no order-placement tool is wired in. Per the "fail loudly/safely into paper mode" requirement above, `execute_trade()` now detects `paper_mode: false` and forces the trade back to paper mode (logging a `system_events` entry and sending an `error` notification) rather than silently faking a live fill. **Setting `execution.paper_mode: false` currently has no live-trading effect** until real MCP wiring is added to the Executor. GTC-vs-Day order duration and exponential-backoff retry on limit-sell placement are also not yet implemented.
+**Implementation status (as of 2026-07-24):** `src/services/executor.py` does not yet call the real Robinhood Agentic Trading MCP, and no order-placement tool is wired in. Per the "fail loudly/safely into paper mode" requirement above, `execute_trade()` detects `paper_mode: false`, resolves the user's `robinhood_account_id` for the log line, and forces the trade back to paper mode (logging a `system_events` entry and sending an `error` notification) rather than silently faking a live fill. **Setting `execution.paper_mode: false` currently has no live-trading effect** until real MCP wiring is added. GTC-vs-Day order duration and exponential-backoff retry on limit-sell placement are also not yet implemented.
+
+**Quote source — read this before trusting any paper-mode number.** `get_live_quote(ticker, expiry, strike, option_type, reference_price)` is a *simulator*, not market data. It derives a bid/ask deterministically from `reference_price` (the alert price on entry, the position's average cost on exit) plus a drift that is a pure function of the contract and the current minute. This makes paper runs reproducible and keeps quotes anchored to the contract actually being traded, but **simulated fills and simulated P/L carry no information about how the strategy would perform on real prices.** Paper mode currently validates the *plumbing* — parse → decide → position ledger → take-profit → exit — not the strategy. The 1–2 week paper-validation step in Section 10 only becomes meaningful once this function is backed by real MCP quotes.
+
+**Position expiry.** Options past their expiry can never fill their take-profit. The monitor reconciles them each pass: pending limit sells are cancelled, the position moves to `status = 'expired'`, and the full premium is logged as a realized loss. Without this, positions accumulate as `open` forever, permanently consuming `max_open_positions` and inflating capital-at-risk.
+
+**Position identity.** A buy is matched to an existing open position by (user, ticker, expiry, strike, option_type) regardless of whether the signal was `BTO` or `ADD`, so a repeat `BTO` on a contract already held averages into it rather than creating a second, separately-managed position. An `ADD` that finds no open position is still opened as a new position but flagged `positions.add_without_parent = 1` for review, per Section 3.3.
 
 ---
 
@@ -290,6 +296,9 @@ Config: webhook URL, per-event-type on/off toggles, and a rate limit (so a burst
   3. Add **Cloudflare Access** (zero-trust) as the auth layer — email OTP or SSO, no passwords to manage.
   4. Alternatively, if you don't have a domain: use HTTP Basic Auth over a WireGuard/Tailscale VPN.
 - Do **not** expose the dashboard port directly via VPS firewall rules — no open ports beyond SSH.
+- `POST /api/settings` is the one write path, and it is deliberately narrow. It accepts **only** the `decision` keys listed below and ignores everything else, so the web UI can never flip `paper_mode` or touch any `execution` setting — going live stays a `config.yaml` edit plus a service restart.
+  - Capped at the `config.yaml` value (raising these increases exposure, so the UI can only tighten): `contracts_per_signal`, `price_tolerance_pct`, `max_daily_spend_usd`, `max_open_positions`.
+  - Range-checked to 0–100 but not capped (raising these is the *more* conservative choice): `take_profit_pct`, `limit_buy_discount_pct`.
 - Flask must run with `debug: false` in every deployed environment — the interactive debugger is a remote-code-execution risk on any externally-reachable instance. Set a real `dashboard.secret_key` in `config.yaml` (or a `DASHBOARD_SECRET_KEY` env var); if left unset, the app now falls back to a random key generated at process start rather than a hardcoded default, meaning sessions won't survive a restart until you configure one.
 
 ---
@@ -393,7 +402,7 @@ Treat this section as non-negotiable regardless of how the rest gets built.
 
 ### 9.1 Kill Switches (multiple, redundant, independent of each other)
 
-1. **Global halt file** — the simplest and most robust: every loop checks for the existence of a file (e.g. `HALT`) in the project root. If found, the bot drops into an infinite sleep loop. This instantly stops all trading while keeping the process alive (preventing systemd restart loops), even if the agent or Discord is broken. This should be your primary, always-available switch.
+1. **Global halt file** — the simplest and most robust: every loop checks for the existence of a file (e.g. `HALT`) in the project root. If found, the loop waits in place — re-checking the file every few seconds — rather than exiting. This instantly stops all trading while keeping the process alive (preventing systemd restart loops), even if the agent or Discord is broken, and means **removing the file resumes trading without a service restart**. This should be your primary, always-available switch.
 2. **Hermes Agent conversational kill switch** — You message the agent via Telegram, Discord, or CLI: *"Stop all trading immediately."* The agent calls the `trigger_kill_switch()` custom tool which creates the `HALT` file. This is the most user-friendly path and works from anywhere with a phone signal. It depends on the agent process being healthy, so treat it as secondary to #1.
 3. **Robinhood-side disconnect** — Robinhood's own agentic trading product includes an account-level disconnect/pause control as a third, independent layer outside Hermes entirely — worth knowing that even if your VPS is fully compromised, you can cut Hermes off from your Robinhood funds directly in the Robinhood app.
 4. **Granular halts** — separate flags for "stop new trades" vs "stop polling" vs "stop everything," since e.g. you might want to keep watching for alerts and logging without letting anything execute.
@@ -564,13 +573,34 @@ A background thread (`summary_loop`) runs continuously to monitor the time.
 - It formats a summary report and pushes it to targets defined in `config.yaml` under `summary.targets` using the `hermes send` CLI tool.
 
 ## 15. Circuit Breaker
-The executor tracks consecutive trade execution errors via a module-level counter. If `error_circuit_breaker_count` (default 3) consecutive failures occur (e.g., Robinhood API is down), the bot automatically:
+The executor tracks consecutive trade execution errors **per user**. If `error_circuit_breaker_count` (default 3) consecutive failures occur for a given user (e.g., Robinhood API is down), the bot automatically:
 1. Logs a `kill_switch` event to `system_events`.
 2. Calls `engage_kill_switch()` to create the `HALT` file.
 3. Sends you an immediate notification via Discord and WhatsApp.
-The counter resets to 0 on every successful trade execution.
 
-## 16. Stale Limit Buy Order Cleanup
+Each user's counter resets to 0 on that user's next successful execution. The count must be per-user: with a single shared counter, one healthy user's successes reset a failing user's streak and the breaker never trips. Note the asymmetry — counting is per-user, but the resulting `HALT` is global, because a broker fault serious enough to trip the breaker warrants stopping everything until you look at it.
+
+## 16. Multi-Tenancy Model
+
+Hermes runs **one shared signal pipeline** feeding **N independent trading accounts**. The split matters:
+
+**Shared (global, one row per event):**
+- `alerts` and `api_calls`. There is a single X account being polled, so polling once and fanning the result out to every user is what keeps the 480 calls/day inside the 10,000/month ceiling. Adding users costs **zero** additional X API quota.
+- The `HALT` kill switch. It halts everything, by design — it is the emergency stop, not a per-user pause.
+
+**Per-user (scoped by `user_id`):**
+- `decisions`, `trades`, `positions`, `limit_orders`, `limit_buy_orders`, `system_events`.
+- Risk configuration, via `user_configs.config_json` merged over the `config.yaml` defaults. Each user has independent `paper_mode`, spend limits, and take-profit targets.
+- Notification routing: `whatsapp_trade_targets`, `whatsapp_forward_targets`, and `notifications.discord_webhook_url`. **Set a per-user Discord webhook if you have more than one tenant** — otherwise all users fall back to the single system-wide `DISCORD_WEBHOOK_URL` and every user's fills and P/L land in the same channel.
+- The execution circuit breaker, which counts consecutive errors per user. A shared counter would let one healthy user's successes reset a failing user's streak, so the breaker would never trip.
+- The daily summary schedule, tracked per user so a user configured for a later time isn't suppressed by an earlier user's send.
+
+**Not yet implemented — required before multi-user live trading:**
+- **Per-user broker routing.** `users.robinhood_account_id` exists and is read when a live order is attempted, but there is no MCP call to route it to. Until the Executor is wired to the Robinhood MCP *and* that call is passed the per-user account id, all users share whatever single account the MCP session is authenticated against. Do not run more than one user with `paper_mode: false`.
+
+**Onboarding a new user** is safe with respect to history: the trade loop only considers alerts from the current NY trading day, so a user added mid-month does not retroactively trade weeks of stale signals. They begin trading from the next alert.
+
+## 17. Stale Limit Buy Order Cleanup
 Pending limit buy orders that have not filled are automatically cancelled under two conditions:
 - **0DTE orders**: Cancelled at the `zero_dte_market_sell_cutoff` time (default 15:50 ET), same as limit sells.
 - **Non-0DTE orders**: Cancelled after 24 hours if still pending, to prevent orphaned orders from accumulating and generating unnecessary API quote requests.

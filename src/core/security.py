@@ -24,11 +24,19 @@ def check_kill_switch():
         except Exception as e:
             print(f"Failed to log kill switch event: {e}")
 
-        # To prevent a systemd crash loop (where systemctl continuously restarts 
-        # the bot only for it to crash again), we drop into an infinite sleep.
-        # This keeps the process alive but halts all trading.
-        while True:
-            time.sleep(60)
+        # To prevent a systemd crash loop (where systemctl continuously restarts
+        # the bot only for it to crash again), we wait in place instead of exiting.
+        # This keeps the process alive but halts all trading. We re-check the file
+        # each pass so removing HALT (rm HALT / resume_trading) actually resumes
+        # the loops without needing a service restart.
+        while os.path.exists(halt_file_path):
+            time.sleep(5)
+
+        print("HALT file removed. Resuming operations.")
+        try:
+            log_system_event('resume', 'HALT file removed. Trading resumed.')
+        except Exception as e:
+            print(f"Failed to log resume event: {e}")
 
 def engage_kill_switch():
     """

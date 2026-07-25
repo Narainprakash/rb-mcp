@@ -14,6 +14,9 @@ from src.services.notifier import notify_alert, notify_add, notify_review_needed
 
 SINCE_ID_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".since_id")
 
+# Debounce marker for the monthly quota warning (NY date string).
+_last_quota_warning_date = None
+
 def get_last_since_id():
     if os.path.exists(SINCE_ID_FILE):
         with open(SINCE_ID_FILE, "r") as f:
@@ -50,8 +53,14 @@ def check_quota_guardrail():
     
     limit = system_config.polling.get("monthly_api_call_ceiling", 10000)
     if count >= limit * 0.95:
-        notify_error("Poller", f"CRITICAL: Approaching Twitter API monthly quota ({count}/{limit})")
-    
+        # Debounced to once per day: this runs every poll pass, so an undebounced
+        # warning would fire ~240x/hour on every channel until month rollover.
+        global _last_quota_warning_date
+        today_str = datetime.now(NY_TZ).strftime("%Y-%m-%d")
+        if _last_quota_warning_date != today_str:
+            _last_quota_warning_date = today_str
+            notify_error("Poller", f"CRITICAL: Approaching Twitter API monthly quota ({count}/{limit})")
+
     return count < limit
 
 def start_poller():
@@ -73,6 +82,7 @@ def start_poller():
     
     # 1. Get Target User ID
     target_account = system_config.polling.get("target_account", "kttechprivate")
+    include_retweets = system_config.polling.get("include_retweets", False)
     target_user_id = None
     while not target_user_id:
         try:
@@ -117,7 +127,7 @@ def start_poller():
                     id=target_user_id,
                     since_id=since_id,
                     max_results=50,
-                    tweet_fields=["created_at"],
+                    tweet_fields=["created_at", "referenced_tweets"],
                     user_auth=True
                 )
                 log_api_call('x', 'get_users_tweets')
@@ -139,6 +149,17 @@ def start_poller():
                     for tweet in tweets:
                         print(f"Processing tweet {tweet.id}: {tweet.text[:50]}...")
                         
+                        # 0. Safeguard: skip retweets/quote-tweets (spec 2.3). A
+                        # retweet of an old #ALERT is timestamped today, so the
+                        # created_at check below would not catch it.
+                        if not include_retweets:
+                            referenced = getattr(tweet, 'referenced_tweets', None) or []
+                            ref_types = {getattr(ref, 'type', None) or ref.get('type') for ref in referenced}
+                            if ref_types & {'retweeted', 'quoted'}:
+                                print(f"Skipping tweet {tweet.id}: retweet/quote-tweet.")
+                                highest_id = str(tweet.id)
+                                continue
+
                         # 1. Safeguard: created_at check
                         if hasattr(tweet, 'created_at') and tweet.created_at:
                             tweet_time_ny = tweet.created_at.astimezone(NY_TZ)
@@ -153,7 +174,11 @@ def start_poller():
                             cursor = conn.cursor()
                             cursor.execute("SELECT id FROM alerts WHERE tweet_id = ?", (str(tweet.id),))
                             if cursor.fetchone():
-                                continue # Already processed
+                                # Already processed. Still advance the cursor, or a
+                                # batch of known tweets leaves since_id pinned and we
+                                # re-fetch the same window every poll, burning quota.
+                                highest_id = str(tweet.id)
+                                continue
                             
                             # Parse Alert
                             signal = parse_alert(tweet.text)
@@ -169,8 +194,11 @@ def start_poller():
                         finally:
                             conn.close()
                         
-                        # Notify
-                        if signal.parse_status == "needs_review":
+                        # Notify. 'ignored' tweets are ordinary account activity,
+                        # logged for audit but deliberately silent.
+                        if signal.parse_status == "ignored":
+                            pass
+                        elif signal.parse_status == "needs_review":
                             notify_review_needed(tweet.text)
                         elif signal.action == "BTO":
                             notify_alert(signal.ticker, signal.expiry, signal.strike, signal.option_type, signal.price, signal.trade_style, signal.action)

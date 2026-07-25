@@ -7,7 +7,7 @@ from src.services.executor import execute_trade, get_live_quote
 from src.services.monitor import process_open_orders
 from src.services.summary import summary_loop
 from src.core.security import check_kill_switch
-from src.core.time_utils import get_current_polling_interval
+from src.core.time_utils import get_current_polling_interval, get_today_ny_bounds
 
 def trade_loop():
     """
@@ -19,6 +19,11 @@ def trade_loop():
     from src.core.db import log_system_event
     from src.services.notifier import notify_error
     log_system_event('startup', 'Hermes Trade & Execution Loop started')
+
+    from src.core.config import system_config
+    monitor_interval = system_config.settings.get('execution', {}).get('monitor_interval_sec', 15)
+    last_monitor_run = 0.0
+
     while True:
         try:
             # 1. Check Kill Switch
@@ -31,8 +36,12 @@ def trade_loop():
                 time.sleep(60)
                 continue
                 
-            # 3. Process Open Orders (Take-Profit & 0DTE cutoffs) - Handles all users internally
-            process_open_orders()
+            # 3. Process Open Orders (Take-Profit & 0DTE cutoffs) - Handles all users internally.
+            # Throttled: this quotes every open order for every user, so running it
+            # on the raw 2s loop would scale quote volume with users x positions.
+            if time.monotonic() - last_monitor_run >= monitor_interval:
+                process_open_orders()
+                last_monitor_run = time.monotonic()
             
             # Fetch active users
             conn = get_connection()
@@ -48,12 +57,17 @@ def trade_loop():
                 conn = get_connection()
                 try:
                     cursor = conn.cursor()
+                    # Bound to the current NY trading day. Without this, a newly added
+                    # or reactivated user would have every historical alert returned
+                    # here and executed at once against stale signals.
+                    start_ny, end_ny = get_today_ny_bounds()
                     cursor.execute("""
                         SELECT a.* FROM alerts a
                         LEFT JOIN decisions d ON a.id = d.alert_id AND d.user_id = ?
                         WHERE a.parse_status = 'success' AND d.id IS NULL
+                          AND a.timestamp >= ? AND a.timestamp < ?
                         ORDER BY a.timestamp ASC
-                    """, (user_id,))
+                    """, (user_id, start_ny, end_ny))
                     pending_alerts = cursor.fetchall()
                 finally:
                     conn.close()
@@ -62,7 +76,7 @@ def trade_loop():
                     print(f"Processing decision for User {user_id}, Alert ID {alert['id']} (${alert['ticker']} {alert['action']})")
                     
                     # Fetch live quote for the decision engine
-                    quote = get_live_quote(alert['ticker'], alert['expiry'], alert['strike'], alert['option_type'])
+                    quote = get_live_quote(alert['ticker'], alert['expiry'], alert['strike'], alert['option_type'], alert['price'])
                     live_ask = quote['ask']
                     
                     # 5. Compute decision based on price tolerance and risk limits
