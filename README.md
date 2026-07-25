@@ -20,6 +20,8 @@ Hermes is a self-hosted agent that polls an X (Twitter) account for options trad
 - **Style & Ticker Filters**: Opt out of `0DTE`/`LOTTO` entirely, or restrict trading to an allow list.
 - **Signal Latency Tracking**: Records seconds from tweet posted to decision made, so you can tell whether your polling cadence is actually fast enough.
 - **Automated Backups**: Nightly online snapshots with rotation, plus an automatic snapshot before any schema migration.
+- **Mobile-Friendly Dashboard**: Renders on a phone without horizontal scrolling, so you can check positions and pause trading from anywhere on your Tailscale network.
+- **Honest Integration Status**: A Robinhood MCP card that reports what actually works rather than what config asks for.
 - **Skip Transparency**: Every skipped alert notifies you with the reason — including risk-limit skips, so you always know when the bot has stopped trading because it hit your daily spend or open-position cap.
 - **Login Protection**: The dashboard locks out an IP after 5 failed logins in 5 minutes and records every failed attempt to the system event feed.
 - **Daily Summary Push**: A configurable end-of-day report (P/L, Trades, Alerts, Open Positions, API Calls) sent via WhatsApp/Telegram to each user.
@@ -553,11 +555,27 @@ ssh -L 9119:127.0.0.1:9119 rb-mcp-user@<your_vps_ip>
 Leave that window open. You can now open `http://127.0.0.1:9119` in your local browser!
 
 ### 5.3 Trading Bot Dashboard (Project-Specific)
-The project's own read-only web dashboard (`rb-mcp-dash` systemd service) runs on port `8420` and provides:
+The project's own web dashboard (`rb-mcp-dash` systemd service) runs on port `8420` and provides:
 - Alert history and parse results
-- Trade log with decision reasoning
+- Trade log with decision reasoning, including signal latency (seconds from tweet to decision)
 - Open positions and P/L summary
 - API call counter (X API quota tracking)
+- **System status**: `Active` / `PAUSED (exits only)` / `HALTED`, with the poller heartbeat on hover so a wedged poller is distinguishable from one idling outside market hours
+- **Robinhood MCP status**: see below
+- Settings (risk limits, filters, paper/live mode)
+
+**Mobile**: the dashboard is designed to be used from a phone — it renders at 375px with no horizontal scrolling, the settings form collapses to a single column with a sticky Save bar, and inputs are sized so iOS doesn't zoom when you tap them. Just open the Tailscale IP in your phone browser.
+
+#### Robinhood MCP status card
+This reports whether the broker integration is genuinely usable, and deliberately **does not** go green just because `quote_source` is set to `robinhood` — a status light that lied about this would be worse than no light at all.
+
+| State | Meaning |
+|---|---|
+| 🔴 Not integrated | No MCP client exists in the trading process. Orders and quotes cannot reach Robinhood. **This is the current state.** |
+| 🟡 Available (not selected) | The provider is implemented but `execution.quote_source` points elsewhere |
+| 🟢 Active | Implemented and selected — quotes are coming from Robinhood |
+
+The card also shows the supporting prerequisites, so you can see what's still missing rather than just a red light: whether the Hermes Agent has an enabled `mcp_servers.robinhood` entry in `~/.hermes/config.yaml`, whether your user has a `robinhood_account_id`, and which quote source is active.
 
 Access it securely via the Tailscale IP configured in Step 2.7 (e.g., `http://<vps-tailscale-ip>:8420`).
 

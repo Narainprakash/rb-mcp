@@ -67,6 +67,24 @@ PROVIDERS = {
     "robinhood": _robinhood_quote,
 }
 
+# Declared capability per provider, so status displays report what is actually
+# true rather than inferring it from config intent. `implemented` means this
+# process can genuinely obtain a quote; `live_data` means those quotes are real
+# market prices. A provider must never be shown as working because someone
+# selected it in config.
+PROVIDER_META = {
+    "simulated": {"implemented": True, "live_data": False,
+                  "label": "Simulated (not market data)"},
+    "robinhood": {"implemented": False, "live_data": True,
+                  "label": "Robinhood Agentic MCP"},
+}
+
+
+def provider_meta(source):
+    return PROVIDER_META.get(
+        source, {"implemented": False, "live_data": False, "label": str(source)}
+    )
+
 
 def get_quote(ticker, expiry, strike, option_type, reference_price, source="simulated"):
     """Returns {'bid': float, 'ask': float} from the configured provider."""

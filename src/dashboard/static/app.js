@@ -221,6 +221,26 @@ async function fetchHealth() {
             modeBadge.className = 'badge mode-live';
         }
         
+        // Robinhood MCP. Driven by whether the quote provider is actually
+        // implemented, not by what config asks for - a green light here would
+        // otherwise imply live trading works when it does not.
+        const rh = data.robinhood;
+        if (rh) {
+            const rhDot = document.getElementById('rh-dot');
+            const rhText = document.getElementById('rh-text');
+            const rhDetail = document.getElementById('rh-detail');
+            if (rh.status === 'active') {
+                rhDot.className = 'dot green';
+            } else if (rh.status === 'available') {
+                rhDot.className = 'dot yellow';
+            } else {
+                rhDot.className = 'dot red';
+            }
+            rhText.textContent = rh.label;
+            rhText.title = rh.detail;
+            rhDetail.textContent = rh.detail;
+        }
+
         // Quota
         document.getElementById('quota-used').textContent = data.api_quota_used;
         document.getElementById('quota-limit').textContent = data.api_quota_limit;

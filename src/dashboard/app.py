@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from src.core.db import get_connection, log_system_event
 from src.core.config import get_user_config, system_config
 from src.services.notifier import notify_mode_change
+from src.services.quotes import provider_meta
 
 app = Flask(__name__)
 def _resolve_secret_key():
@@ -105,6 +106,71 @@ BOOL_DECISION_KEYS = ("trading_enabled",)
 LIST_DECISION_KEYS = ("skip_trade_styles", "allowed_tickers", "blocked_tickers")
 KNOWN_TRADE_STYLES = ("0DTE", "SWING", "DAYTRADE", "LOTTO")
 SIZING_MODES = ("contracts", "dollars")
+
+HERMES_AGENT_CONFIG = os.path.expanduser("~/.hermes/config.yaml")
+
+
+def agent_mcp_registered():
+    """Whether the Hermes Agent has an enabled `robinhood` MCP server.
+
+    Best-effort and read-only: the agent owns this file, we only report on it.
+    Registration with the agent does not mean this process can place orders -
+    the agent holds the OAuth session, not us.
+    """
+    try:
+        import yaml
+        with open(HERMES_AGENT_CONFIG) as handle:
+            agent_config = yaml.safe_load(handle) or {}
+        server = (agent_config.get('mcp_servers') or {}).get('robinhood') or {}
+        return bool(server.get('enabled', False))
+    except Exception:
+        return False
+
+
+def robinhood_status(user_config, user_id):
+    """Honest report of Robinhood MCP readiness.
+
+    Deliberately driven by whether the quote provider is actually implemented,
+    not by whether someone selected it in config. Showing 'connected' because a
+    config key says 'robinhood' would be worse than showing nothing - it would
+    invite the assumption that live trading works.
+    """
+    source = user_config.execution.get('quote_source', 'simulated')
+    meta = provider_meta('robinhood')
+
+    account_row = query_db(
+        "SELECT robinhood_account_id FROM users WHERE id = ?", (user_id,), one=True
+    )
+    account_id_set = bool(account_row and account_row.get('robinhood_account_id'))
+    registered = agent_mcp_registered()
+
+    if meta['implemented'] and source == 'robinhood':
+        status, label = 'active', 'Active'
+    elif meta['implemented']:
+        status, label = 'available', 'Available (not selected)'
+    else:
+        status, label = 'not_integrated', 'Not integrated'
+
+    prerequisites = [
+        f"Agent MCP registered: {'yes' if registered else 'no'}",
+        f"Account ID set: {'yes' if account_id_set else 'no'}",
+        f"Quote source: {source}",
+    ]
+    if status == 'not_integrated':
+        detail = ("No MCP client in the trading process, so orders and quotes "
+                  "cannot be routed to Robinhood yet. " + " | ".join(prerequisites))
+    else:
+        detail = " | ".join(prerequisites)
+
+    return {
+        "status": status,
+        "label": label,
+        "detail": detail,
+        "quote_source": source,
+        "agent_mcp_registered": registered,
+        "account_id_set": account_id_set,
+    }
+
 
 def dict_factory(cursor, row):
     d = {}
@@ -239,7 +305,8 @@ def health():
         "api_quota_limit": limit,
         "quota_pct": round((count / limit) * 100, 2) if limit else 0,
         "poller_last_run": poller_last_run,
-        "poller_age_sec": poller_age_sec
+        "poller_age_sec": poller_age_sec,
+        "robinhood": robinhood_status(user_config, current_user.id)
     })
 
 @app.route('/api/stats')
