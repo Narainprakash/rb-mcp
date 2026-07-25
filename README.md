@@ -22,6 +22,8 @@ Hermes is a self-hosted agent that polls an X (Twitter) account for options trad
 - **Automated Backups**: Nightly online snapshots with rotation, plus an automatic snapshot before any schema migration.
 - **Mobile-Friendly Dashboard**: Renders on a phone without horizontal scrolling, so you can check positions and pause trading from anywhere on your Tailscale network.
 - **Honest Integration Status**: A Robinhood MCP card that reports what actually works rather than what config asks for.
+- **Real Robinhood Quotes**: Live bid/ask from the Agentic Trading MCP, with permanently cached contract UUIDs so a repeat quote costs one API call instead of three. Any bad or unusable market skips the signal rather than guessing a price.
+- **Secure User Management**: `scripts/add_user.py` creates dashboard logins without putting passwords in shell history.
 - **Skip Transparency**: Every skipped alert notifies you with the reason — including risk-limit skips, so you always know when the bot has stopped trading because it hit your daily spend or open-position cap.
 - **Login Protection**: The dashboard locks out an IP after 5 failed logins in 5 minutes and records every failed attempt to the system event feed.
 - **Daily Summary Push**: A configurable end-of-day report (P/L, Trades, Alerts, Open Positions, API Calls) sent via WhatsApp/Telegram to each user.
@@ -193,11 +195,13 @@ sudo systemctl start rb-mcp
 ### Step 2.6: Dashboard Systemd Service
 The dashboard is a read-only Flask web server that requires user authentication. We run it as a separate service so it doesn't block the trading loop.
 
-Note: You must insert at least one user into the `users` table manually to login. For example:
+You need at least one dashboard user before you can log in. Create one:
 ```bash
-python -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('password123'))"
-sqlite3 hermes_mt.db "INSERT INTO users (username, password_hash) VALUES ('admin', 'hash_from_above');"
+venv/bin/python scripts/add_user.py
 ```
+It prompts for the username and password (the password is not echoed) and stores only a scrypt hash. Re-running it for an existing username offers a password reset.
+
+> Use the script rather than hand-writing SQL: the old `generate_password_hash('...')` one-liner put your plaintext password in shell history, and pasting hashes by hand makes it easy to store the wrong literal.
 
 Session signing key: if you set neither `dashboard.secret_key` in `config.yaml` nor `DASHBOARD_SECRET_KEY` in `.env`, the dashboard generates one on first start and persists it in the database, so logins survive restarts without any action from you. Set it explicitly only if you want the key held outside the database:
 ```bash
@@ -448,6 +452,36 @@ This will trigger the browser-based authentication flow. Complete it when prompt
 > 3. Your browser will try to redirect to localhost and fail (e.g., "Site can't be reached"). This is expected!
 > 4. Copy the entire URL from your browser's address bar (it contains the `?code=...` parameter) and paste it back into your VPS terminal prompt. Hermes will instantly grab the token and save it.
 
+### 4.2.1 Authorize the *trading bot* (separate from the agent)
+
+Registering the MCP with the Hermes Agent (4.2) lets **the agent** query Robinhood. It does not let the **trading bot** do anything — they are separate processes, and the agent's OAuth session is not shared. The bot holds its own credentials.
+
+Log the bot in once:
+```bash
+cd ~/rb-mcp && venv/bin/python scripts/robinhood_login.py
+```
+
+It prints an authorization URL. Open it in a **desktop** browser, approve access for your **agentic** account, then paste back the URL your browser lands on. That page will fail to load (`http://localhost:8421/callback`) — expected, nothing is listening there; only the `?code=...` in the address bar matters.
+
+Tokens are cached in `.robinhood_token.json` (mode `0600`, gitignored). The refresh grant means this is a **one-time** step that survives restarts.
+
+> **Why not reuse the agent's token?** It exists at `~/.hermes/mcp-tokens/robinhood.json`, but OAuth refresh tokens are typically single-use and rotating — refreshing it from the bot would invalidate the agent's copy and silently break your Telegram/WhatsApp Robinhood access. A separate registration avoids that race.
+
+To inspect what the server exposes, or to debug connectivity, there is a read-only probe. It only calls `tools/list` and never invokes a tool, so it cannot place an order:
+```bash
+venv/bin/python scripts/probe_robinhood_mcp.py
+```
+
+### 4.2.2 Turn on real quotes
+With the bot logged in, switch the quote source in `config.yaml`:
+```yaml
+execution:
+  quote_source: "robinhood"   # real bid/ask; "simulated" is NOT market data
+```
+Then `sudo systemctl restart rb-mcp`. **This is safe to do while `paper_mode: true`** — you get real market prices with simulated fills, which is the first genuinely informative paper testing available. Quotes are read-only; no order is ever placed.
+
+Contract lookups are cached in the `option_instruments` table (a contract's Robinhood UUID never changes), so a repeat quote costs one API call rather than three.
+
 ### 4.3 Verify the Connection
 Run the MCP list command to confirm the Robinhood MCP is connected:
 
@@ -468,9 +502,9 @@ You can flip the mode two ways. Both are audited.
 **From `config.yaml`** (below) — sets the system-wide default rather than a per-user override, and needs a restart.
 
 
-> **⚠️ CURRENT LIMITATION**: `src/services/executor.py` does not yet call the Robinhood MCP tool, and no order-placement call is wired in. If you set `paper_mode: false`, the Executor detects this, logs an error/notification, and automatically forces the trade back into paper mode as a fail-safe rather than pretending to place a real order. **No trades will actually execute live until this MCP wiring is implemented in the Executor.** The steps below describe the intended flow once that integration lands.
+> **⚠️ CURRENT LIMITATION — order placement is not implemented.** Quotes are wired up and real (Section 4.2.2), but `src/services/executor.py` still makes no `place_option_order` call. If you set `paper_mode: false`, the Executor detects this, logs an error, notifies you, and forces the trade back into paper mode rather than pretending to place an order. **No trade will execute live until order placement lands**, regardless of this flag or the dashboard toggle. The steps below describe the intended flow once it does.
 >
-> **Paper-mode results are not strategy validation.** `get_live_quote()` is a deterministic simulator anchored to the alert price, not market data. Paper runs exercise the full pipeline — parse, decide, position ledger, take-profit, exit — which is genuinely useful for catching logic bugs, but the resulting P/L and win rate say nothing about how the strategy would have done on real prices. Treat the 1–2 week paper period in Section 4 as a plumbing test until real MCP quotes are wired in.
+> **How much your paper results mean depends on `quote_source`.** With `simulated` (the default) prices are a deterministic model anchored to the alert price — paper runs exercise the full pipeline but the P/L and win rate say nothing about real-world performance. With `quote_source: robinhood` (Section 4.2.2) the decision engine sees **real bid/ask**, so the price-tolerance logic and entry decisions become genuinely meaningful. Fills are still simulated either way until order placement is implemented.
 
 Once you've verified the MCP connection is healthy:
 
@@ -579,9 +613,12 @@ So you can legitimately query Robinhood through the agent while the bot still ca
 | State | Meaning |
 |---|---|
 | 🔴 Not configured | Robinhood isn't set up at all — no MCP server registered with the agent |
-| 🟡 Agent only - no trade routing | Your agent can query Robinhood, but the trading process cannot place orders. **This is the current state for most setups**, and it is why flipping to live mode still trades nothing |
-| 🟡 Available (not selected) | A provider is implemented but `execution.quote_source` points elsewhere |
-| 🟢 Active | Implemented and selected — quotes and orders route to Robinhood |
+| 🟡 Agent only - no trade routing | Your agent can query Robinhood, but the trading process has no provider |
+| 🟡 Needs login | The provider exists but the bot isn't authenticated — run `scripts/robinhood_login.py`. It would fail closed on every quote until then |
+| 🟡 Available (not selected) | Logged in and ready, but `execution.quote_source` is still `simulated` |
+| 🟢 Active | Logged in and selected — real quotes are flowing |
+
+The card also shows `API budget: N/60 per min`. If a `Refused (rate limit)` count appears, you're hitting the ceiling and signals are being skipped — see the rate-limit section above.
 
 The card also shows the supporting prerequisites, so you can see what's still missing rather than just a red light: whether the Hermes Agent has an enabled `mcp_servers.robinhood` entry in `~/.hermes/config.yaml`, whether your user has a `robinhood_account_id`, which quote source is active, and **current API usage against the rate-limit budget**.
 
@@ -690,6 +727,38 @@ Each user's summary is tracked separately, so users configured for different tim
 ## 9. Multi-User Setup
 
 Hermes polls **one** X account and fans the signals out to **N** independent trading accounts. Adding users costs no additional Twitter API quota.
+
+### 9.0 Adding a new user (full checklist)
+
+**Step 1 — Dashboard login.** On the VPS:
+```bash
+cd ~/rb-mcp && venv/bin/python scripts/add_user.py
+```
+The new user can now sign in at the dashboard. They start with the system defaults from `config.yaml` and, importantly, **paper mode on**.
+
+**Step 2 — Risk limits.** Either have them set their own in dashboard **Settings**, or seed them directly. Values are capped at the `config.yaml` ceilings regardless:
+```bash
+sqlite3 ~/rb-mcp/hermes_mt.db "INSERT INTO user_configs (user_id, config_json) VALUES (2, '{\"decision\": {\"max_daily_spend_usd\": 500, \"max_daily_loss_usd\": 200, \"contracts_per_signal\": 1}}');"
+```
+
+**Step 3 — Their own Discord webhook.** Skip this and every user's fills and P/L land in the *same* channel, since they all fall back to the system-wide `DISCORD_WEBHOOK_URL`. Add to that user's `user_configs` JSON:
+```json
+{ "notifications": { "discord_webhook_url": "https://discord.com/api/webhooks/..." } }
+```
+WhatsApp targets (`whatsapp_trade_targets`, `whatsapp_forward_targets`) work the same way and are already per-user.
+
+**Step 4 — Robinhood account number** (only needed for live orders; skip while paper trading). Ask the agent *"What are my Robinhood accounts?"*, then:
+```bash
+sqlite3 ~/rb-mcp/hermes_mt.db "UPDATE users SET robinhood_account_id = 'REAL_ACCOUNT_NUMBER' WHERE username = 'their_username';"
+```
+Verify it stored what you meant — it is easy to save a placeholder by mistake:
+```bash
+sqlite3 ~/rb-mcp/hermes_mt.db "SELECT username, robinhood_account_id FROM users;"
+```
+
+**Step 5 — Confirm.** The new user should see their own empty feed and positions. Nothing else changes: they share the single X poll, so adding users costs **no** additional Twitter API quota.
+
+> **⚠️ One Robinhood login per instance.** The OAuth credentials in `.robinhood_token.json` belong to the *process*, not to a dashboard user — so all users currently trade through whichever Robinhood account that login owns. `users.robinhood_account_id` is read on the live-order path but per-user routing is not finished (Section 9.4). **Do not run more than one user with `paper_mode: false`.**
 
 ### 9.1 What is per-user
 Every user gets their own decisions, trades, positions, limit orders, risk limits, notification targets, circuit-breaker state, and daily summary. Per-user overrides live in the `user_configs` table as JSON and are merged over the `config.yaml` defaults:
