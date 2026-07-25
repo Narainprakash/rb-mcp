@@ -575,7 +575,22 @@ This reports whether the broker integration is genuinely usable, and deliberatel
 | 🟡 Available (not selected) | The provider is implemented but `execution.quote_source` points elsewhere |
 | 🟢 Active | Implemented and selected — quotes are coming from Robinhood |
 
-The card also shows the supporting prerequisites, so you can see what's still missing rather than just a red light: whether the Hermes Agent has an enabled `mcp_servers.robinhood` entry in `~/.hermes/config.yaml`, whether your user has a `robinhood_account_id`, and which quote source is active.
+The card also shows the supporting prerequisites, so you can see what's still missing rather than just a red light: whether the Hermes Agent has an enabled `mcp_servers.robinhood` entry in `~/.hermes/config.yaml`, whether your user has a `robinhood_account_id`, which quote source is active, and **current API usage against the rate-limit budget**.
+
+#### Avoiding rate limits / account restriction
+The order monitor checks every open order for every user on each pass, so call volume is `users × open orders × passes`. At the default 15s interval that's ~1,740 passes in a session — five open orders is ~8,700 calls/day, and ten users with ten positions each would be ~174,000. That is enough to get rate limited or flagged.
+
+Three controls keep this bounded, and they're enforced in code rather than left to careful loop-writing:
+
+| Control | Setting | Behaviour |
+|---|---|---|
+| Hard ceiling | `execution.broker_rate_limit_per_min` (60) | Sliding-window cap on **all** broker calls. When exhausted, calls are refused and the signal is skipped — it fails closed rather than risking the account |
+| Quote dedup | `execution.quote_cache_ttl_sec` (10) | Ten users holding the same contract cost one call, not ten |
+| Slower live cadence | `execution.live_order_poll_interval_sec` (60) | Live mode only asks whether resting orders filled, so it doesn't need paper mode's 15s simulation cadence |
+
+> **Note:** Robinhood doesn't publish rate limits for the Agentic MCP, so 60/min is a conservative guess rather than a documented figure. Tune it once you can see their actual limits — and watch the "API budget" line on the MCP card, plus any "Refused (rate limit)" count, which means you're hitting the ceiling and trades are being skipped.
+
+Paper mode never touches this budget — the simulated provider is local.
 
 Access it securely via the Tailscale IP configured in Step 2.7 (e.g., `http://<vps-tailscale-ip>:8420`).
 

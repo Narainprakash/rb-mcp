@@ -16,6 +16,7 @@ from src.core.db import get_connection, log_system_event
 from src.core.config import get_user_config, system_config
 from src.services.notifier import notify_mode_change
 from src.services.quotes import provider_meta
+from src.services.broker_limits import current_usage as broker_usage
 
 app = Flask(__name__)
 def _resolve_secret_key():
@@ -151,11 +152,17 @@ def robinhood_status(user_config, user_id):
     else:
         status, label = 'not_integrated', 'Not integrated'
 
+    calls_last_min, refused = broker_usage()
+    budget = system_config.settings.get('execution', {}).get('broker_rate_limit_per_min', 60)
+
     prerequisites = [
         f"Agent MCP registered: {'yes' if registered else 'no'}",
         f"Account ID set: {'yes' if account_id_set else 'no'}",
         f"Quote source: {source}",
+        f"API budget: {calls_last_min}/{budget} per min",
     ]
+    if refused:
+        prerequisites.append(f"Refused (rate limit): {refused}")
     if status == 'not_integrated':
         detail = ("No MCP client in the trading process, so orders and quotes "
                   "cannot be routed to Robinhood yet. " + " | ".join(prerequisites))
@@ -169,6 +176,9 @@ def robinhood_status(user_config, user_id):
         "quote_source": source,
         "agent_mcp_registered": registered,
         "account_id_set": account_id_set,
+        "calls_last_min": calls_last_min,
+        "rate_limit_per_min": budget,
+        "calls_refused": refused,
     }
 
 

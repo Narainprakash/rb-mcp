@@ -61,8 +61,20 @@ execution:
   robinhood_account_id: "<your_agentic_account_id>"  # Your specific Robinhood Agentic Account ID for live trading
   error_circuit_breaker_count: 3         # Consecutive execution errors *per user* before that user's failures engage the kill switch
   zero_dte_market_sell_cutoff: "15:50"   # Time (ET) to automatically market-sell open 0DTE limit sell orders to prevent worthless expiration
-  monitor_interval_sec: 15               # How often open orders are re-checked. Each pass quotes every open order for every
-                                          # user, so lowering this multiplies quote volume by (users x positions).
+  monitor_interval_sec: 15               # How often open orders are re-checked in PAPER mode. Each pass quotes every open
+                                          # order for every user, so lowering this multiplies quote volume by (users x positions).
+  live_order_poll_interval_sec: 60       # Same, but in LIVE mode, where every check is a real broker API call. Deliberately
+                                          # slower: the broker holds your resting orders, so we only need periodic status checks.
+
+  # --- Broker API budget (shared across ALL users) ---
+  # The loops are O(users x open orders) per pass, so at 15s that is ~1,740
+  # passes a session: a handful of positions becomes thousands of calls a day.
+  # This is a hard ceiling enforced in code, not a guideline - when it is hit,
+  # calls are refused and the signal is skipped rather than risking the account.
+  broker_rate_limit_per_min: 60          # NOTE: Robinhood does not publish MCP limits; this is a conservative guess.
+                                          # Tune it once you can see their actual limits.
+  quote_cache_ttl_sec: 10                # Dedup identical contract quotes within this window. Ten users holding the same
+                                          # contract cost one call, not ten. 0 disables caching.
 
 # ==========================================
 # Hermes Config: Notification & Alerting

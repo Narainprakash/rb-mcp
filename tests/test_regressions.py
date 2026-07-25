@@ -106,6 +106,87 @@ def test_robinhood_provider_fails_closed():
         get_quote("SPY", "2026-08-21", 750, "C", 1.81, source="robinhood")
 
 
+# --- Broker API budget -----------------------------------------------------
+
+@pytest.fixture
+def fake_provider(monkeypatch):
+    """Registers a counting network-backed provider."""
+    import src.services.quotes as quotes
+    import src.services.broker_limits as limits
+
+    calls = {"n": 0}
+
+    def provider(ticker, expiry, strike, option_type, reference_price):
+        calls["n"] += 1
+        return {"bid": 1.00, "ask": 1.05}
+
+    monkeypatch.setitem(quotes.PROVIDERS, "fake", provider)
+    monkeypatch.setitem(quotes.PROVIDER_META, "fake",
+                        {"implemented": True, "live_data": True, "label": "fake"})
+    monkeypatch.setattr(quotes, "log_broker_call", lambda endpoint: None)
+    limits.reset()
+    quotes.clear_cache()
+    yield calls
+    limits.reset()
+    quotes.clear_cache()
+
+
+def test_rate_limiter_caps_broker_calls(fake_provider):
+    """The cap must hold regardless of how often the loops ask."""
+    from src.services.quotes import QuoteUnavailable, get_quote
+
+    succeeded = refused = 0
+    for strike in range(200):
+        try:
+            get_quote("SPY", "2030-01-01", strike, "C", 1.0,
+                      source="fake", cache_ttl_sec=0, max_calls_per_min=60)
+            succeeded += 1
+        except QuoteUnavailable:
+            refused += 1
+
+    assert succeeded == 60
+    assert refused == 140
+    assert fake_provider["n"] == 60, "provider was called past the cap"
+
+
+def test_quote_cache_dedups_identical_contracts(fake_provider):
+    """Ten users holding one contract must cost one call, not ten."""
+    from src.services.quotes import get_quote
+
+    for _ in range(10):
+        get_quote("SPY", "2030-01-01", 750, "C", 1.0,
+                  source="fake", cache_ttl_sec=30, max_calls_per_min=60)
+
+    assert fake_provider["n"] == 1
+
+
+def test_simulated_provider_does_not_spend_broker_budget(fake_provider):
+    """Paper mode is local; it must never consume the shared broker budget."""
+    import src.services.broker_limits as limits
+    from src.services.quotes import get_quote
+
+    for _ in range(50):
+        get_quote("SPY", "2030-01-01", 750, "C", 1.81,
+                  source="simulated", cache_ttl_sec=10, max_calls_per_min=60)
+
+    assert limits.current_usage()[0] == 0
+
+
+def test_rate_limited_quote_fails_closed(fake_provider):
+    """Exhausting the budget must surface as QuoteUnavailable so the caller
+    skips the signal, rather than any partial or invented price."""
+    from src.services.quotes import QuoteUnavailable, get_quote
+
+    for strike in range(60):
+        get_quote("SPY", "2030-01-01", strike, "C", 1.0,
+                  source="fake", cache_ttl_sec=0, max_calls_per_min=60)
+
+    with pytest.raises(QuoteUnavailable) as excinfo:
+        get_quote("SPY", "2030-01-01", 999, "C", 1.0,
+                  source="fake", cache_ttl_sec=0, max_calls_per_min=60)
+    assert "rate limit" in str(excinfo.value).lower()
+
+
 # --- Multi-tenancy: new users must not backfill historical alerts ------------
 
 PENDING_ALERTS_SQL = """

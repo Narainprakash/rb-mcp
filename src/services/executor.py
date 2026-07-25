@@ -48,10 +48,21 @@ def get_live_quote(ticker, expiry, strike, option_type, reference_price, user_id
     `execution.quote_source`.
     """
     if user_id is None:
-        source = system_config.settings.get('execution', {}).get('quote_source', 'simulated')
+        execution = system_config.settings.get('execution', {})
     else:
-        source = get_user_config(user_id).execution.get('quote_source', 'simulated')
-    return get_quote(ticker, expiry, strike, option_type, reference_price, source=source)
+        execution = get_user_config(user_id).execution
+
+    # Rate limit and cache TTL are read from the *system* config even for a
+    # user-scoped call: the broker budget is shared across all users, so it must
+    # not be something an individual tenant can raise.
+    system_execution = system_config.settings.get('execution', {})
+
+    return get_quote(
+        ticker, expiry, strike, option_type, reference_price,
+        source=execution.get('quote_source', 'simulated'),
+        cache_ttl_sec=system_execution.get('quote_cache_ttl_sec', 10),
+        max_calls_per_min=system_execution.get('broker_rate_limit_per_min', 60),
+    )
 
 def process_buy_fill(user_id: int, decision_id: int, ticker: str, expiry: str, strike: float, option_type: str, signal_action: str, fill_price: float, contracts: int, paper_mode: bool, order_id: str, conn=None):
     """

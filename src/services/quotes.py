@@ -8,9 +8,16 @@ run mean anything. This module keeps that seam explicit.
 Select the active provider with `execution.quote_source` in config.yaml.
 """
 import hashlib
+import threading
+import time
 from datetime import datetime
 
 from src.core.time_utils import NY_TZ
+from src.services.broker_limits import (
+    DEFAULT_CALLS_PER_MIN,
+    RateLimitExceeded,
+    consume,
+)
 
 
 class QuoteUnavailable(Exception):
@@ -86,11 +93,82 @@ def provider_meta(source):
     )
 
 
-def get_quote(ticker, expiry, strike, option_type, reference_price, source="simulated"):
-    """Returns {'bid': float, 'ask': float} from the configured provider."""
+_cache_lock = threading.Lock()
+_cache = {}  # contract key -> (expires_at_monotonic, quote)
+
+
+def _cache_key(ticker, expiry, strike, option_type):
+    return f"{ticker}|{expiry}|{strike}|{option_type}"
+
+
+def clear_cache():
+    """Test helper."""
+    with _cache_lock:
+        _cache.clear()
+
+
+def get_quote(ticker, expiry, strike, option_type, reference_price,
+              source="simulated", cache_ttl_sec=0, max_calls_per_min=None):
+    """Returns {'bid': float, 'ask': float} from the configured provider.
+
+    For network-backed providers the call is deduplicated through a short-TTL
+    cache and then charged against the broker rate limit. Both matter because
+    the monitor quotes every open order of every user on each pass: without the
+    cache, ten users holding the same contract cost ten identical calls; without
+    the limiter, nothing bounds the total.
+
+    The simulated provider is local, so it neither caches nor spends budget.
+    """
     provider = PROVIDERS.get(source)
     if provider is None:
         raise QuoteUnavailable(
             f"unknown quote_source '{source}' (known: {', '.join(sorted(PROVIDERS))})"
         )
-    return provider(ticker, expiry, strike, option_type, reference_price)
+
+    meta = provider_meta(source)
+    if not meta.get("live_data"):
+        return provider(ticker, expiry, strike, option_type, reference_price)
+
+    key = _cache_key(ticker, expiry, strike, option_type)
+    now = time.monotonic()
+
+    if cache_ttl_sec > 0:
+        with _cache_lock:
+            entry = _cache.get(key)
+            if entry and entry[0] > now:
+                return entry[1]
+
+    limit = max_calls_per_min if max_calls_per_min is not None else DEFAULT_CALLS_PER_MIN
+    try:
+        consume(max_per_min=limit, endpoint=f"quote:{source}")
+    except RateLimitExceeded as e:
+        # Fail closed. Skipping a signal is recoverable; a restricted brokerage
+        # account is not.
+        raise QuoteUnavailable(str(e))
+
+    log_broker_call(f"quote:{ticker}{strike}{option_type}")
+    quote = provider(ticker, expiry, strike, option_type, reference_price)
+
+    if cache_ttl_sec > 0:
+        with _cache_lock:
+            _cache[key] = (now + cache_ttl_sec, quote)
+
+    return quote
+
+
+def log_broker_call(endpoint):
+    """Records a Robinhood call in api_calls so the dashboard reflects real
+    broker usage, not just X API usage."""
+    try:
+        from src.core.db import get_connection
+        conn = get_connection()
+        try:
+            conn.execute(
+                "INSERT INTO api_calls (service, endpoint) VALUES ('robinhood', ?)",
+                (endpoint,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"WARNING: could not log broker API call: {e}")

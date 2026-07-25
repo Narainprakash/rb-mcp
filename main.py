@@ -42,7 +42,14 @@ def trade_loop():
     log_system_event('startup', 'Hermes Trade & Execution Loop started')
 
     from src.core.config import system_config
-    monitor_interval = system_config.settings.get('execution', {}).get('monitor_interval_sec', 15)
+    execution_config = system_config.settings.get('execution', {})
+    # Paper mode polls quotes to simulate fills, so it needs the faster cadence.
+    # Live mode only asks the broker whether its own resting orders filled, and
+    # every one of those is a real API call against a shared budget - so it runs
+    # on a slower interval by default.
+    paper_interval = execution_config.get('monitor_interval_sec', 15)
+    live_interval = execution_config.get('live_order_poll_interval_sec', 60)
+    monitor_interval = paper_interval if execution_config.get('paper_mode', True) else live_interval
     last_monitor_run = 0.0
 
     while True:
