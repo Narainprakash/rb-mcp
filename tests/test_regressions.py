@@ -135,6 +135,38 @@ def test_todays_alert_is_still_picked_up(db):
 
 # --- Schema: expiry reconciliation and add_without_parent -------------------
 
+def test_init_db_upgrades_a_pre_migration_database(tmp_path, monkeypatch):
+    """Indexes on newly added columns must be created after the ALTER TABLEs.
+    On an existing database CREATE TABLE IF NOT EXISTS is a no-op, so building
+    the index first fails with `no such column`."""
+    import src.core.db as core_db
+
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.executescript(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT UNIQUE, password_hash TEXT);"
+        "CREATE TABLE positions (id INTEGER PRIMARY KEY, user_id INTEGER, ticker TEXT, expiry TEXT,"
+        " strike REAL, option_type TEXT, total_quantity INTEGER, average_cost REAL, status TEXT);"
+        "CREATE TABLE trades (id INTEGER PRIMARY KEY, user_id INTEGER, decision_id INTEGER,"
+        " paper_mode BOOLEAN, buy_order_id TEXT, fill_price REAL, quantity INTEGER, status TEXT);"
+    )
+    old.execute("INSERT INTO positions VALUES (1,1,'SPY','2030-01-01',750,'C',1,1.0,'open')")
+    old.commit()
+    old.close()
+
+    monkeypatch.setattr(core_db, "DB_PATH", str(path))
+    core_db.init_db()
+
+    conn = core_db.get_connection()
+    try:
+        assert "add_without_parent" in {r["name"] for r in conn.execute("PRAGMA table_info(positions)")}
+        assert "position_id" in {r["name"] for r in conn.execute("PRAGMA table_info(trades)")}
+        # Pre-existing rows survive the upgrade.
+        assert conn.execute("SELECT COUNT(*) c FROM positions").fetchone()["c"] == 1
+    finally:
+        conn.close()
+
+
 def test_positions_table_has_add_without_parent(db):
     columns = {r["name"] for r in db.execute("PRAGMA table_info(positions)").fetchall()}
     assert "add_without_parent" in columns

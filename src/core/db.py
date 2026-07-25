@@ -127,7 +127,12 @@ CREATE TABLE IF NOT EXISTS system_events (
     FOREIGN KEY(user_id) REFERENCES users(id)
 );
 
--- Performance Indexes
+"""
+
+# Indexes are applied *after* the column migrations in init_db(): an index on a
+# newly added column cannot be created until that column exists, and on an
+# upgraded database CREATE TABLE IF NOT EXISTS is a no-op that leaves it absent.
+INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_alerts_parse_status ON alerts(parse_status);
 -- Covers the trade loop's pending-alert query, which runs every 2s per user.
 CREATE INDEX IF NOT EXISTS idx_alerts_status_time ON alerts(parse_status, timestamp);
@@ -161,6 +166,8 @@ def init_db():
     trade_columns = {row['name'] for row in cursor.fetchall()}
     if 'position_id' not in trade_columns:
         cursor.execute("ALTER TABLE trades ADD COLUMN position_id INTEGER")
+
+    cursor.executescript(INDEXES)
 
     conn.commit()
     conn.close()

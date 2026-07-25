@@ -494,7 +494,17 @@ When you make changes to your code locally and push them to GitHub, you will nee
 
 > **Tip:** You can always view live logs for either service by running `journalctl -u <service-name> -f`
 
+> **Schema changes:** you do **not** need to wipe the database when pulling new code. `init_db()` runs on every startup of the trading service and applies any missing columns in place, so an existing `hermes_mt.db` keeps its history. Restart `rb-mcp` (not just `rb-mcp-dash`) after a pull so the migration runs before the dashboard queries the new columns.
+
 ## 7. Architecture & Safeguards
+
+### Database & Transaction Model
+The bot runs several loops (poller, trade/monitor, daily summary) plus a separate dashboard process against one SQLite file in WAL mode. WAL allows many concurrent readers but only **one writer**, which drives two rules for anyone extending the trading path:
+
+1. **Never open a second connection inside an open transaction.** It will block on your own write lock until the busy timeout and then fail with `database is locked`, discarding the whole uncommitted pass. Pass the existing connection down instead — this is why `process_buy_fill()` takes a `conn` argument.
+2. **Never do network I/O inside a transaction.** Notifications are collected and fired only after the commit. A hung webhook inside a transaction holds the write lock and stalls the poller too.
+
+Related: a buy fill and the `filled` stamp on its limit-buy order commit **together**. Splitting them across two commits is what would allow the same order to be bought twice after an interrupted pass.
 
 ### Twitter Polling Logic & `.since_id`
 The bot relies on a hidden file (`.since_id`) in the root directory to track its place. Every time it polls Twitter, it asks the API: *"Only give me tweets newer than this ID."*

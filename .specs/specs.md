@@ -113,7 +113,7 @@ All four windows and both cadences must be defined in a config file (Section 8),
 - Use the X API's user-timeline endpoint scoped to the single account, `since_id` cursor-based, so each poll only pulls new tweets rather than re-fetching the last N.
 - **IMPORTANT SAFEGUARD**: The bot relies on a hidden file (`.since_id`) to track its place. If that file is missing (like on the very first time the bot boots up), it defaults to pulling the 50 most recent tweets. If the account hasn't tweeted in a few days, those 5 tweets will be very old, but the bot could process them as if they are brand new and execute late trades! To prevent this, the poller explicitly checks `tweet.created_at` against the current calendar day and silently ignores any tweet from a previous day.
 - Persist the last-seen tweet ID to disk/DB so a service restart doesn't reprocess or skip tweets.
-- Track and log every API call (timestamp, endpoint) to the DB, per your requirement to see "twitter API calls" in the dashboard.
+- Track and log every API call (timestamp, endpoint) to the DB, per your requirement to see "twitter API calls" in the dashboard. Log the call **before** issuing the request, not after it succeeds: a timeout, 5xx, or 429 still consumes quota, so logging only successes undercounts real usage and lets the guardrail sail past the true ceiling — and the divergence grows fastest during an outage, exactly when the count matters. The client also runs with `wait_on_rate_limit` so a 429 backs off rather than being retried on the normal 15-second cadence.
 - **Quota guardrail:** Track the monthly pull count. If it approaches the 10,000 limit, alert you via Discord and optionally degrade the polling cadence to avoid hitting the hard cap before month-end.
 
 ### 2.3 Filtering
@@ -160,6 +160,8 @@ The signal format is highly structured and consistent across all six sample twee
    - Log the raw tweet and the failure reason.
    - Send a Discord notification tagged `REVIEW NEEDED`.
    - **Never** pass an incomplete parse to the Decision Engine.
+
+   Price must be **positive**, not merely present. A zero or negative price is not a tradeable signal, and letting one through is worse than a plain parse failure: the Decision Engine raises on it *before* a decision row is written, so the alert is never marked handled and the trade loop retries it every 2 seconds — with an error notification each time — for the rest of the day.
 
 **Multi-line Tweet Support**: The signal provider frequently formats tweets with `BTO`, `$TICKER`, and `7/24 749C` on separate lines. All regexes use `\s+` which natively matches newlines, so multi-line formatting is handled correctly without special flags.
 
@@ -259,12 +261,18 @@ Send to your `@benkiproject` Discord (either a channel named `benkiproject` or t
 | Trade executed (live) | `EXECUTED — 1x $SPY 754C @ 1.02 (paper: false)` |
 | Trade executed (paper) | `PAPER TRADE — 1x $SPY 754C @ 1.02` |
 | Limit Sell Placed | `LIMIT SELL PLACED — 1x $SPY 754C @ 1.22 (20% target)` |
-| Limit Sell Filled | `SOLD — 1x $SPY 754C @ 1.22 — P/L: +$0.21 (+20.8%)` |
-| Trade skipped | `SKIPPED — ask 2.15 exceeds 1.81 +10% tolerance` |
+| Limit Sell Filled (win) | `SOLD — 1x $SPY 754C @ 1.22 — P/L: +$0.21 (+20.80%)` |
+| Limit Sell Filled (loss) | `SOLD — 1x $SPY 754C @ 0.75 — P/L: -$25.00 (-25.00%)` |
+| Trade skipped | `SKIPPED — ask 2.15 exceeds 1.99 (+10% tolerance)` |
+| Trade skipped (risk limit) | `SKIPPED — estimated spend $5100.00 would exceed daily max` |
 | Kill switch engaged | `KILL SWITCH ACTIVE — all trading halted` |
 | System error | `ERROR — [component] — [message]` |
 
-**Formatting**: All monetary values (prices, targets, P/L) must be formatted to two decimal places (e.g., `$1.50` instead of `$1.5`) to ensure professional readability.
+**Formatting**: All monetary values (prices, targets, P/L) must be formatted to two decimal places (e.g., `$1.50` instead of `$1.5`) to ensure professional readability. Signed values must carry their **real** sign — never a hardcoded `+` — or a loss renders as `(+-25.00%)`. Losses are routine here: the 0DTE market-sell path at 15:50 exists precisely to exit below cost.
+
+**Every skip notifies.** All five skip paths (per-trade spend, daily spend, per-position spend, max open positions, price tolerance) send the decision's reason string. A risk-limit skip stops trading for the rest of the session, and silence is indistinguishable from "no alerts today".
+
+**Timeouts**: every notification call — Discord webhook and `hermes send` alike — must carry a timeout (`NOTIFY_TIMEOUT_SEC`, 10s). These run on the trade path; `requests` blocks forever by default, and a hung notification inside a transaction holds the database write lock (see Section 5).
 
 Config: webhook URL, per-event-type on/off toggles, and a rate limit (so a burst of adds doesn't spam the channel).
 
@@ -276,15 +284,15 @@ Config: webhook URL, per-event-type on/off toggles, and a rate limit (so a burst
 
 - `alerts` — raw tweet, parsed fields, parse status (success/needs_review), timestamp
 - `decisions` — link to alert, recommended price, observed price, action taken, reasoning
-- `trades` — link to decision, paper_mode boolean, buy order id, fill price, quantity, status (open/closed/expired)
-- `positions` — groups related trades (BTO + ADDs) for the same contract; tracks total quantity, avg cost, current P/L status
+- `trades` — link to decision **and to `position_id`**, paper_mode boolean, buy order id, fill price, quantity, status (open/closed/expired). The position link is what lets a trade be closed alongside its position; without it `trades.status` silently diverges from `positions.status`.
+- `positions` — groups related trades (BTO + ADDs) for the same contract; tracks total quantity, avg cost, current P/L status (open/closed/expired), and `add_without_parent` for an ADD that arrived with no matching open position
 - `limit_orders` — sell order id, link to position, target price, status (pending/filled/cancelled), fill timestamp, realized P/L
 - `api_calls` — service (X / Robinhood), endpoint, timestamp
 - `system_events` — kill switch toggles, config changes, errors, service restarts
 
 **Timezones**: All database timestamps are recorded in New York Local Time (EST/EDT) using SQLite's `localtime` modifier, rather than UTC.
 
-**Performance Indexes**: To prevent full table scans during the 2-second polling loops, the schema includes indexes on `alerts(parse_status)`, `limit_orders(status)`, `limit_buy_orders(status)`, and a composite index on `positions(ticker, expiry, strike, option_type, status)`.
+**Performance Indexes**: To prevent full table scans during the 2-second polling loops, the schema includes indexes on `alerts(parse_status)`, `limit_orders(status)`, `limit_buy_orders(status)`, `trades(position_id)`, and composite indexes on `positions(ticker, expiry, strike, option_type, status)` and `alerts(parse_status, timestamp)`. The last one matters most: the trade loop's pending-alert query filters on both columns and runs every 2 seconds per user, against a table that grows for the life of the deployment (it also stores every `ignored` non-alert tweet). On `parse_status` alone that degrades into a scan of every successful alert ever recorded.
 
 ### 7.2 Dashboard Views
 
@@ -421,7 +429,7 @@ Treat this section as non-negotiable regardless of how the rest gets built.
 - **Telegram gateway**: The Hermes Agent's Telegram gateway must be configured to accept commands **only** from the authorized user defined in `config.yaml` → `gateway.authorized_telegram_user` (default: `Prakash_1803`). Any messages from other Telegram users must be ignored. This prevents unauthorized parties from issuing kill switch commands or querying trade data.
 - Principle of least privilege: the Executor service's Robinhood credentials should only ever touch the dedicated agentic account, never your main brokerage account.
 - Secrets stored with restrictive file permissions (`600`), owned by the service user, not root, not world-readable.
-- Dashboard behind auth (Section 7.3).
+- Dashboard behind auth (Section 7.3). The login endpoint locks out a source IP after 5 failed attempts within 5 minutes and records every failure to `system_events` as `auth_failure` (and `auth_lockout` on trip), so a brute-force attempt is visible in the dashboard's own event feed rather than silent. Note the lockout is per-process and in-memory: it resets on service restart and is a speed bump against a compromised device on the tailnet, not a substitute for the network-level access control in Section 7.3.
 
 ### 9.3 Guardrails Against Runaway Behavior
 
@@ -579,6 +587,7 @@ In `config.yaml`, the `notifications` block supports splitting targets:
 A background thread (`summary_loop`) runs continuously to monitor the time. 
 - At a configurable time (default 16:30 ET), it aggregates the day's metrics: total realized P/L, trades executed, alerts parsed, currently open positions, and X API calls made.
 - It formats a summary report and pushes it to targets defined in `config.yaml` under `summary.targets` using the `hermes send` CLI tool.
+- The send date is tracked **per user**, so users configured for different times each get theirs. `get_daily_metrics(user_id, date_str)` honours `date_str`, so a summary missed during an outage can be regenerated for a past day rather than silently reporting today's figures under yesterday's heading.
 
 ## 15. Circuit Breaker
 The executor tracks consecutive trade execution errors **per user**. If `error_circuit_breaker_count` (default 3) consecutive failures occur for a given user (e.g., Robinhood API is down), the bot automatically:
