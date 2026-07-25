@@ -262,6 +262,62 @@
                         <label style="font-size: 0.85rem; margin-bottom: 0.25rem; cursor: help; border-bottom: 1px dotted rgba(255,255,255,0.3); width: fit-content;">Max Daily Spend ($)</label>
                         <input type="number" id="set_max_daily_spend_usd" style="padding: 0.5rem; background: rgba(0,0,0,0.3); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;">
                     </div>
+                    <div style="display: flex; flex-direction: column;" title="Halts new entries once realized losses today reach this amount. Open positions are still managed. 0 disables.">
+                        <label style="font-size: 0.85rem; margin-bottom: 0.25rem; cursor: help; border-bottom: 1px dotted rgba(255,255,255,0.3); width: fit-content;">Max Daily Loss ($)</label>
+                        <input type="number" id="set_max_daily_loss_usd" style="padding: 0.5rem; background: rgba(0,0,0,0.3); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;">
+                    </div>
+                    <div style="display: flex; flex-direction: column;" title="Skip any signal older than this. Protects against replaying stale alerts after downtime. 0 disables.">
+                        <label style="font-size: 0.85rem; margin-bottom: 0.25rem; cursor: help; border-bottom: 1px dotted rgba(255,255,255,0.3); width: fit-content;">Max Signal Age (s)</label>
+                        <input type="number" id="set_max_signal_age_sec" style="padding: 0.5rem; background: rgba(0,0,0,0.3); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;">
+                    </div>
+                    <div style="display: flex; flex-direction: column;" title="Ceiling for a single order.">
+                        <label style="font-size: 0.85rem; margin-bottom: 0.25rem; cursor: help; border-bottom: 1px dotted rgba(255,255,255,0.3); width: fit-content;">Max Per Trade ($)</label>
+                        <input type="number" id="set_per_trade_max_spend_usd" style="padding: 0.5rem; background: rgba(0,0,0,0.3); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;">
+                    </div>
+                    <div style="display: flex; flex-direction: column;" title="Total dollar exposure allowed across all contracts in one position, including ADDs.">
+                        <label style="font-size: 0.85rem; margin-bottom: 0.25rem; cursor: help; border-bottom: 1px dotted rgba(255,255,255,0.3); width: fit-content;">Max Per Position ($)</label>
+                        <input type="number" id="set_max_spend_per_position_usd" style="padding: 0.5rem; background: rgba(0,0,0,0.3); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;">
+                    </div>
+                </div>
+
+                <div style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 1rem; display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                    <div style="display: flex; flex-direction: column;" title="'contracts' buys a fixed count. 'dollars' derives the count from the risk budget so exposure is consistent across signals.">
+                        <label style="font-size: 0.85rem; margin-bottom: 0.25rem; cursor: help; border-bottom: 1px dotted rgba(255,255,255,0.3); width: fit-content;">Sizing Mode</label>
+                        <select id="set_sizing_mode" style="padding: 0.5rem; background: rgba(0,0,0,0.3); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;">
+                            <option value="contracts">Fixed contracts</option>
+                            <option value="dollars">Dollar budget</option>
+                        </select>
+                    </div>
+                    <div style="display: flex; flex-direction: column;" title="Dollar budget per signal when sizing mode is 'dollars'.">
+                        <label style="font-size: 0.85rem; margin-bottom: 0.25rem; cursor: help; border-bottom: 1px dotted rgba(255,255,255,0.3); width: fit-content;">Risk per Signal ($)</label>
+                        <input type="number" id="set_risk_per_signal_usd" style="padding: 0.5rem; background: rgba(0,0,0,0.3); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;">
+                    </div>
+                </div>
+
+                <div style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 1rem; display: flex; flex-direction: column; gap: 0.75rem;">
+                    <div style="display: flex; align-items: center; gap: 0.5rem;" title="Uncheck to stop opening new positions. Open positions are still monitored and exited.">
+                        <input type="checkbox" id="set_trading_enabled" style="width:18px; height:18px;">
+                        <label for="set_trading_enabled" style="font-weight: bold; color: #4ade80; cursor: pointer;">Trading enabled (new entries)</label>
+                    </div>
+                    <div style="display: flex; flex-direction: column;" title="Signals tagged with any checked style are skipped.">
+                        <label style="font-size: 0.85rem; margin-bottom: 0.4rem;">Skip trade styles</label>
+                        <div style="display: flex; gap: 1rem; flex-wrap: wrap; font-size: 0.85rem;">
+                            <label style="cursor:pointer;"><input type="checkbox" class="skip-style" value="0DTE"> 0DTE</label>
+                            <label style="cursor:pointer;"><input type="checkbox" class="skip-style" value="SWING"> SWING</label>
+                            <label style="cursor:pointer;"><input type="checkbox" class="skip-style" value="DAYTRADE"> DAYTRADE</label>
+                            <label style="cursor:pointer;"><input type="checkbox" class="skip-style" value="LOTTO"> LOTTO</label>
+                        </div>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                        <div style="display: flex; flex-direction: column;" title="Comma-separated. Leave blank to allow all tickers.">
+                            <label style="font-size: 0.85rem; margin-bottom: 0.25rem;">Allowed tickers</label>
+                            <input type="text" id="set_allowed_tickers" placeholder="e.g. SPY, QQQ" style="padding: 0.5rem; background: rgba(0,0,0,0.3); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;">
+                        </div>
+                        <div style="display: flex; flex-direction: column;" title="Comma-separated. These are never traded.">
+                            <label style="font-size: 0.85rem; margin-bottom: 0.25rem;">Blocked tickers</label>
+                            <input type="text" id="set_blocked_tickers" placeholder="e.g. TSLA" style="padding: 0.5rem; background: rgba(0,0,0,0.3); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;">
+                        </div>
+                    </div>
                 </div>
             </form>
             <div class="modal-actions">

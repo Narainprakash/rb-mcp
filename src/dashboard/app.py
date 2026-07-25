@@ -34,14 +34,27 @@ RISK_CEILING_KEYS = (
     "price_tolerance_pct",
     "max_daily_spend_usd",
     "max_open_positions",
+    "per_trade_max_spend_usd",
+    "max_spend_per_position_usd",
+    "risk_per_signal_usd",
 )
 # Raising these does not increase capital at risk (a higher profit target or a
 # deeper limit-buy discount is the more conservative choice), so they are only
 # range-checked, not capped at the system default.
 FREE_PCT_KEYS = ("take_profit_pct", "limit_buy_discount_pct")
+# Lowering these tightens risk, so they are range-checked but not capped:
+# a shorter staleness window and a smaller loss cap are both safer.
+FREE_NUMERIC_KEYS = ("max_signal_age_sec", "max_daily_loss_usd")
 
-SETTABLE_DECISION_KEYS = RISK_CEILING_KEYS + FREE_PCT_KEYS
-INTEGER_DECISION_KEYS = ("contracts_per_signal", "max_open_positions")
+SETTABLE_DECISION_KEYS = RISK_CEILING_KEYS + FREE_PCT_KEYS + FREE_NUMERIC_KEYS
+INTEGER_DECISION_KEYS = ("contracts_per_signal", "max_open_positions", "max_signal_age_sec")
+
+# Non-numeric settings: a soft pause, style/ticker filters, and sizing mode.
+# None of these can raise exposure, so they need validation but no ceiling.
+BOOL_DECISION_KEYS = ("trading_enabled",)
+LIST_DECISION_KEYS = ("skip_trade_styles", "allowed_tickers", "blocked_tickers")
+KNOWN_TRADE_STYLES = ("0DTE", "SWING", "DAYTRADE", "LOTTO")
+SIZING_MODES = ("contracts", "dollars")
 
 def dict_factory(cursor, row):
     d = {}
@@ -147,13 +160,36 @@ def health():
     limit = system_config.polling.get("monthly_api_call_ceiling", 10000)
     
     user_config = get_user_config(current_user.id)
-    
+
+    trading_halt_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "HALT_TRADING")
+    entries_paused = os.path.exists(trading_halt_path) or not user_config.decision.get("trading_enabled", True)
+
+    heartbeat = query_db("SELECT value FROM system_state WHERE key = 'poller_last_run'", one=True)
+    poller_last_run = heartbeat['value'] if heartbeat else None
+    poller_age_sec = None
+    if poller_last_run:
+        try:
+            last = NY_TZ.localize(datetime.strptime(poller_last_run, "%Y-%m-%d %H:%M:%S"))
+            poller_age_sec = round((datetime.now(NY_TZ) - last).total_seconds())
+        except (ValueError, TypeError):
+            poller_age_sec = None
+
+    if kill_switch_active:
+        status = "halted"
+    elif entries_paused:
+        status = "paused"
+    else:
+        status = "active"
+
     return jsonify({
-        "status": "halted" if kill_switch_active else "active",
+        "status": status,
         "paper_mode": user_config.execution.get("paper_mode", True),
+        "quote_source": user_config.execution.get("quote_source", "simulated"),
         "api_quota_used": count,
         "api_quota_limit": limit,
-        "quota_pct": round((count / limit) * 100, 2)
+        "quota_pct": round((count / limit) * 100, 2) if limit else 0,
+        "poller_last_run": poller_last_run,
+        "poller_age_sec": poller_age_sec
     })
 
 @app.route('/api/stats')
@@ -191,7 +227,7 @@ def feed():
     # Returns last 50 alerts, joined with decisions and trades for the current user
     data = query_db("""
         SELECT a.id, a.timestamp as alert_time, a.action, a.ticker, a.expiry, a.strike, a.option_type, a.price as rec_price,
-               d.action_taken, d.observed_price, d.reasoning,
+               d.action_taken, d.observed_price, d.reasoning, d.latency_sec,
                t.status as trade_status, t.paper_mode, a.raw_text, a.parse_status
         FROM alerts a
         LEFT JOIN decisions d ON a.id = d.alert_id AND d.user_id = ?
@@ -293,11 +329,39 @@ def settings():
                 if value > 100:
                     errors.append(f"{key} must be between 0 and 100")
                     continue
+            elif key in FREE_NUMERIC_KEYS:
+                pass  # lowering these tightens risk; no ceiling needed
             else:
                 ceiling = system_decision.get(key)
                 if ceiling is not None and value > ceiling:
                     value = ceiling
             clamped[key] = int(value) if key in INTEGER_DECISION_KEYS else value
+
+        for key in BOOL_DECISION_KEYS:
+            if key in incoming_decision:
+                clamped[key] = bool(incoming_decision[key])
+
+        if 'sizing_mode' in incoming_decision:
+            mode = str(incoming_decision['sizing_mode'])
+            if mode not in SIZING_MODES:
+                errors.append(f"sizing_mode must be one of {', '.join(SIZING_MODES)}")
+            else:
+                clamped['sizing_mode'] = mode
+
+        for key in LIST_DECISION_KEYS:
+            if key not in incoming_decision:
+                continue
+            raw = incoming_decision[key]
+            if not isinstance(raw, list):
+                errors.append(f"{key} must be a list")
+                continue
+            values = [str(v).strip().upper() for v in raw if str(v).strip()]
+            if key == 'skip_trade_styles':
+                unknown = [v for v in values if v not in KNOWN_TRADE_STYLES]
+                if unknown:
+                    errors.append(f"unknown trade styles: {', '.join(unknown)}")
+                    continue
+            clamped[key] = values
 
         if errors:
             return jsonify({"status": "error", "errors": errors}), 400

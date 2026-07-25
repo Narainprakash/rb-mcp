@@ -1,6 +1,9 @@
 """Regression tests for the defects found in the July 2026 code review."""
+import json
 import os
+import re
 import sqlite3
+import subprocess
 from datetime import date, timedelta
 
 import pytest
@@ -9,6 +12,7 @@ from src.core.db import SCHEMA
 from src.core.time_utils import get_ny_time
 from src.services.executor import get_live_quote
 from src.services.parser import parse_alert
+from src.services.quotes import QuoteUnavailable, get_quote
 
 
 @pytest.fixture
@@ -87,8 +91,19 @@ def test_quote_is_deterministic():
 
 
 def test_quote_requires_reference_price():
-    with pytest.raises(ValueError):
+    with pytest.raises(QuoteUnavailable):
         get_live_quote("SPY", "2026-08-21", 750, "C", None)
+
+
+def test_unknown_quote_source_fails_closed():
+    """A bad provider name must not silently fall back to invented prices."""
+    with pytest.raises(QuoteUnavailable):
+        get_quote("SPY", "2026-08-21", 750, "C", 1.81, source="nonexistent")
+
+
+def test_robinhood_provider_fails_closed():
+    with pytest.raises(QuoteUnavailable):
+        get_quote("SPY", "2026-08-21", 750, "C", 1.81, source="robinhood")
 
 
 # --- Multi-tenancy: new users must not backfill historical alerts ------------
@@ -135,22 +150,133 @@ def test_todays_alert_is_still_picked_up(db):
 
 # --- Schema: expiry reconciliation and add_without_parent -------------------
 
+# --- Decision engine: new risk controls ------------------------------------
+
+@pytest.fixture
+def user_db(tmp_path, monkeypatch):
+    """A one-user database wired into the modules that read it."""
+    import src.core.db as core_db
+    import src.core.config as core_config
+
+    path = str(tmp_path / "u.db")
+    monkeypatch.setattr(core_db, "DB_PATH", path)
+    core_db.init_db()
+    conn = core_db.get_connection()
+    conn.execute("INSERT INTO users (username, password_hash, is_active) VALUES ('a','h',1)")
+    conn.commit()
+    conn.close()
+
+    def set_config(overrides):
+        conn = core_db.get_connection()
+        conn.execute(
+            "INSERT INTO user_configs (user_id, config_json) VALUES (1, ?)"
+            " ON CONFLICT(user_id) DO UPDATE SET config_json=excluded.config_json",
+            (json.dumps(overrides),),
+        )
+        conn.commit()
+        conn.close()
+
+    return set_config
+
+
+def test_soft_pause_blocks_new_entries(user_db):
+    from src.services.decision import compute_decision
+
+    user_db({"decision": {"trading_enabled": False}})
+    action, reason, contracts = compute_decision(1, 1, "SPY", "2030-01-01", 750, "C", 1.81, 1.81)
+    assert action == "skip"
+    assert contracts == 0
+    assert "paused" in reason
+
+
+def test_trade_style_filter_skips_excluded_style(user_db):
+    from src.services.decision import compute_decision
+
+    user_db({"decision": {"skip_trade_styles": ["0DTE"]}})
+    action, reason, _ = compute_decision(1, 1, "SPY", "2030-01-01", 750, "C", 1.81, 1.81, "0DTE,LOTTO")
+    assert action == "skip"
+    assert "0DTE" in reason
+
+    # A style that isn't excluded still trades.
+    action, _, _ = compute_decision(1, 1, "SPY", "2030-01-01", 750, "C", 1.81, 1.81, "SWING")
+    assert action != "skip"
+
+
+def test_ticker_block_and_allow_lists(user_db):
+    from src.services.decision import compute_decision
+
+    user_db({"decision": {"blocked_tickers": ["TSLA"]}})
+    action, reason, _ = compute_decision(1, 1, "TSLA", "2030-01-01", 750, "C", 1.81, 1.81)
+    assert action == "skip" and "blocked" in reason
+
+    user_db({"decision": {"allowed_tickers": ["SPY"]}})
+    action, reason, _ = compute_decision(1, 1, "QQQ", "2030-01-01", 750, "C", 1.81, 1.81)
+    assert action == "skip" and "allowed" in reason
+    action, _, _ = compute_decision(1, 1, "SPY", "2030-01-01", 750, "C", 1.81, 1.81)
+    assert action != "skip"
+
+
+def test_dollar_sizing_normalises_exposure(user_db):
+    from src.services.decision import resolve_contracts
+
+    user_db({"decision": {"sizing_mode": "dollars", "risk_per_signal_usd": 500}})
+    # $500 budget: 5 contracts of a $1.00 option, 1 of a $5.00 option.
+    assert resolve_contracts(1, 1.00) == 5
+    assert resolve_contracts(1, 5.00) == 1
+    # Too expensive for even one contract.
+    assert resolve_contracts(1, 6.00) == 0
+
+    # Default mode is unchanged by this feature.
+    user_db({"decision": {"contracts_per_signal": 3}})
+    assert resolve_contracts(1, 1.00) == 3
+
+
+def test_daily_loss_limit_pauses_entries(user_db):
+    from src.services.decision import compute_decision
+    import src.core.db as core_db
+
+    user_db({"decision": {"max_daily_loss_usd": 100}})
+    conn = core_db.get_connection()
+    conn.execute(
+        "INSERT INTO positions (user_id, ticker, expiry, strike, option_type, total_quantity, average_cost, status)"
+        " VALUES (1,'SPY','2030-01-01',750,'C',1,1.0,'closed')"
+    )
+    conn.execute(
+        "INSERT INTO limit_orders (user_id, position_id, target_price, status, realized_pnl, fill_timestamp)"
+        " VALUES (1, 1, 1.2, 'filled', -150.0, datetime('now','localtime'))"
+    )
+    conn.commit()
+    conn.close()
+
+    action, reason, _ = compute_decision(1, 1, "SPY", "2030-01-01", 750, "C", 1.81, 1.81)
+    assert action == "skip"
+    assert "loss limit" in reason
+
+
 def test_init_db_upgrades_a_pre_migration_database(tmp_path, monkeypatch):
     """Indexes on newly added columns must be created after the ALTER TABLEs.
     On an existing database CREATE TABLE IF NOT EXISTS is a no-op, so building
     the index first fails with `no such column`."""
     import src.core.db as core_db
 
+    # Use the real pre-migration schema from git rather than a hand-written
+    # stub: a stub that omits columns which always existed tests a database
+    # that never shipped, and misses the migration path that actually runs.
+    old_src = subprocess.run(
+        ["git", "show", "727bc2b:src/core/db.py"],
+        capture_output=True, text=True, cwd=os.path.dirname(os.path.dirname(__file__)),
+    ).stdout
+    match = re.search(r'SCHEMA = """(.*?)"""', old_src, re.S)
+    if not match:
+        pytest.skip("historical schema unavailable (shallow clone?)")
+
     path = tmp_path / "old.db"
     old = sqlite3.connect(path)
-    old.executescript(
-        "CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT UNIQUE, password_hash TEXT);"
-        "CREATE TABLE positions (id INTEGER PRIMARY KEY, user_id INTEGER, ticker TEXT, expiry TEXT,"
-        " strike REAL, option_type TEXT, total_quantity INTEGER, average_cost REAL, status TEXT);"
-        "CREATE TABLE trades (id INTEGER PRIMARY KEY, user_id INTEGER, decision_id INTEGER,"
-        " paper_mode BOOLEAN, buy_order_id TEXT, fill_price REAL, quantity INTEGER, status TEXT);"
+    old.executescript(match.group(1))
+    old.execute(
+        "INSERT INTO positions (user_id, ticker, expiry, strike, option_type, total_quantity, average_cost, status)"
+        " VALUES (1,'SPY','2030-01-01',750,'C',1,1.0,'open')"
     )
-    old.execute("INSERT INTO positions VALUES (1,1,'SPY','2030-01-01',750,'C',1,1.0,'open')")
     old.commit()
     old.close()
 
@@ -159,12 +285,17 @@ def test_init_db_upgrades_a_pre_migration_database(tmp_path, monkeypatch):
 
     conn = core_db.get_connection()
     try:
-        assert "add_without_parent" in {r["name"] for r in conn.execute("PRAGMA table_info(positions)")}
-        assert "position_id" in {r["name"] for r in conn.execute("PRAGMA table_info(trades)")}
+        cols = lambda t: {r["name"] for r in conn.execute(f"PRAGMA table_info({t})")}
+        assert "add_without_parent" in cols("positions")
+        assert "position_id" in cols("trades")
+        assert "tweet_created_at" in cols("alerts")
+        assert "latency_sec" in cols("decisions")
         # Pre-existing rows survive the upgrade.
         assert conn.execute("SELECT COUNT(*) c FROM positions").fetchone()["c"] == 1
     finally:
         conn.close()
+
+    core_db.init_db()  # idempotent on an already-migrated database
 
 
 def test_positions_table_has_add_without_parent(db):

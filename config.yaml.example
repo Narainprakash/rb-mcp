@@ -13,6 +13,8 @@ polling:
   skip_market_holidays: true             # If true, the bot will sleep during weekends and NYSE holidays
   include_retweets: false                # If false (default), retweets and quote-tweets are skipped. A retweet of an
                                           # old #ALERT is timestamped today, so it would otherwise trade as a fresh signal.
+  quota_degrade_pct: 80                  # At this % of the monthly ceiling, slow polling instead of stopping dead at 100%
+  quota_degrade_factor: 4                # Multiply the poll interval by this once degraded (15s -> 60s)
 
 # ==========================================
 # Hermes Config: Decision Engine Settings
@@ -21,17 +23,41 @@ decision:
   price_tolerance_pct: 10                # Max acceptable markup percentage from the alerted entry price for a market buy
   take_profit_pct: 20                    # Target profit percentage for the automated limit sell order (e.g. 20%)
   limit_buy_discount_pct: 20             # Discount target percentage for a limit buy if the live ask is currently lower than the alert
-  contracts_per_signal: 1                # Number of contracts to buy per alert (for both BTO and ADD)
   max_open_positions: 10                 # Hard cap on the number of simultaneous active option positions
   per_trade_max_spend_usd: 500           # Maximum dollar amount allowed for a single order
   max_spend_per_position_usd: 1000       # Maximum dollar exposure allowed per contract (protects against multiple ADD signals)
   max_daily_spend_usd: 5000              # Maximum total dollars deployed in a single calendar day
+
+  # --- Position sizing ---
+  # 'contracts' buys a fixed count, so risk per signal swings with the option's
+  # price (1 contract is $50 at $0.50 but $500 at $5.00). 'dollars' derives the
+  # count from risk_per_signal_usd so exposure stays consistent.
+  sizing_mode: "contracts"               # "contracts" or "dollars"
+  contracts_per_signal: 1                # Used when sizing_mode is "contracts"
+  risk_per_signal_usd: 250               # Used when sizing_mode is "dollars"
+
+  # --- Loss and staleness guards ---
+  max_daily_loss_usd: 0                  # Stop opening new positions once realized losses today reach this. 0 disables.
+                                          # Spend caps limit what is deployed; this limits what can be lost.
+  max_signal_age_sec: 120                # Skip signals older than this. Guards against replaying stale alerts after
+                                          # downtime, since systemd restarts the service into a backlog. 0 disables.
+
+  # --- Per-user filters ---
+  trading_enabled: true                  # Soft pause: false stops new entries but keeps managing open positions.
+                                          # Unlike the HALT file, exits continue to be monitored.
+  skip_trade_styles: []                  # e.g. ["0DTE", "LOTTO"] to opt out of the riskiest signals entirely
+  allowed_tickers: []                    # e.g. ["SPY", "QQQ"]. Empty means all tickers are allowed.
+  blocked_tickers: []                    # e.g. ["TSLA"]. Never traded.
 
 # ==========================================
 # Hermes Config: Execution Engine Settings
 # ==========================================
 execution:
   paper_mode: true                       # If true, simulates trades and fills. If false, connects to Robinhood MCP for live trading.
+  quote_source: "simulated"              # Where option quotes come from. "simulated" is NOT market data - it exercises the
+                                          # pipeline deterministically but says nothing about strategy performance.
+                                          # "robinhood" is registered but not implemented; it fails closed rather than
+                                          # falling back to invented prices. See src/services/quotes.py.
   robinhood_account_id: "<your_agentic_account_id>"  # Your specific Robinhood Agentic Account ID for live trading
   error_circuit_breaker_count: 3         # Consecutive execution errors *per user* before that user's failures engage the kill switch
   zero_dte_market_sell_cutoff: "15:50"   # Time (ET) to automatically market-sell open 0DTE limit sell orders to prevent worthless expiration

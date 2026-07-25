@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS alerts (
     option_type TEXT,
     price REAL,
     trade_style TEXT,
-    parse_status TEXT NOT NULL, -- 'success' or 'needs_review'
+    parse_status TEXT NOT NULL, -- 'success', 'needs_review' or 'ignored'
+    tweet_created_at DATETIME, -- when the tweet was posted, for latency measurement
     timestamp DATETIME DEFAULT (datetime('now', 'localtime'))
 );
 
@@ -45,6 +46,7 @@ CREATE TABLE IF NOT EXISTS decisions (
     observed_price REAL,
     action_taken TEXT NOT NULL, -- 'buy', 'skip', 'error'
     reasoning TEXT,
+    latency_sec REAL, -- seconds from tweet posted to decision made
     timestamp DATETIME DEFAULT (datetime('now', 'localtime')),
     FOREIGN KEY(user_id) REFERENCES users(id),
     FOREIGN KEY(alert_id) REFERENCES alerts(id)
@@ -118,6 +120,13 @@ CREATE TABLE IF NOT EXISTS api_calls (
     timestamp DATETIME DEFAULT (datetime('now', 'localtime'))
 );
 
+-- Small key/value store for service liveness and similar singletons.
+CREATE TABLE IF NOT EXISTS system_state (
+    key TEXT PRIMARY KEY,
+    value TEXT,
+    updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
+);
+
 CREATE TABLE IF NOT EXISTS system_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER, -- Optional, NULL if system-wide
@@ -166,6 +175,16 @@ def init_db():
     trade_columns = {row['name'] for row in cursor.fetchall()}
     if 'position_id' not in trade_columns:
         cursor.execute("ALTER TABLE trades ADD COLUMN position_id INTEGER")
+
+    cursor.execute("PRAGMA table_info(alerts)")
+    alert_columns = {row['name'] for row in cursor.fetchall()}
+    if 'tweet_created_at' not in alert_columns:
+        cursor.execute("ALTER TABLE alerts ADD COLUMN tweet_created_at DATETIME")
+
+    cursor.execute("PRAGMA table_info(decisions)")
+    decision_columns = {row['name'] for row in cursor.fetchall()}
+    if 'latency_sec' not in decision_columns:
+        cursor.execute("ALTER TABLE decisions ADD COLUMN latency_sec REAL")
 
     cursor.executescript(INDEXES)
 

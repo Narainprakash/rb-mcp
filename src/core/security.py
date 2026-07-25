@@ -38,6 +38,17 @@ def check_kill_switch():
         except Exception as e:
             print(f"Failed to log resume event: {e}")
 
+def trading_halted():
+    """True when the HALT_TRADING file exists.
+
+    The granular halt from spec 9.1.4: stop opening new positions while the
+    poller and the exit monitor keep running. The full HALT file also stops
+    exit management, which can be worse than doing nothing when positions are
+    open, so this is usually the switch you actually want.
+    """
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "HALT_TRADING")
+    return os.path.exists(path)
+
 def engage_kill_switch():
     """
     Creates the HALT file to trigger the kill switch.

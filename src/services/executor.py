@@ -1,10 +1,10 @@
-import hashlib
 import uuid
 import math
 from datetime import datetime
-from src.core.config import get_user_config
+from src.core.config import get_user_config, system_config
 from src.core.db import get_connection, log_system_event
 from src.core.time_utils import NY_TZ
+from src.services.quotes import get_quote, QuoteUnavailable
 from src.services.notifier import (
     notify_executed_live, 
     notify_executed_paper, 
@@ -39,32 +39,19 @@ def get_user_robinhood_account_id(user_id: int):
     return row['robinhood_account_id'] if row else None
 
 
-def get_live_quote(ticker, expiry, strike, option_type, reference_price):
+def get_live_quote(ticker, expiry, strike, option_type, reference_price, user_id=None):
     """
-    SIMULATED quote source. This is NOT market data.
+    Returns a quote from the configured provider (see src/services/quotes.py).
 
-    There is no Robinhood MCP integration yet, so quotes are derived
-    deterministically from `reference_price` (the alert price for entries, the
-    position's average cost for exits) plus a small drift that is a pure
-    function of the contract and the current minute. Two consequences worth
-    knowing: results are reproducible rather than random, and simulated P/L
-    says nothing about how the strategy would have performed on real prices.
-
-    When the MCP is wired in, replace this body with the real quote call and
-    log it via log_api_call('robinhood', ...).
+    Defaults to the simulated provider, which is NOT market data - it exercises
+    the pipeline but says nothing about strategy performance. Change it with
+    `execution.quote_source`.
     """
-    if reference_price is None or reference_price <= 0:
-        raise ValueError(f"reference_price required for simulated quote of {ticker} {strike}{option_type}")
-
-    # Deterministic drift in [-0.15, +0.15] keyed on contract + minute bucket.
-    bucket = datetime.now(NY_TZ).strftime("%Y-%m-%d %H:%M")
-    seed = f"{ticker}|{expiry}|{strike}|{option_type}|{bucket}"
-    digest = int(hashlib.sha256(seed.encode()).hexdigest()[:8], 16)
-    drift_pct = ((digest % 3001) / 10000.0) - 0.15
-
-    mid = max(0.01, reference_price * (1 + drift_pct))
-    spread = max(0.01, round(mid * 0.02, 2))
-    return {"bid": round(mid - spread / 2, 2), "ask": round(mid + spread / 2, 2)}
+    if user_id is None:
+        source = system_config.settings.get('execution', {}).get('quote_source', 'simulated')
+    else:
+        source = get_user_config(user_id).execution.get('quote_source', 'simulated')
+    return get_quote(ticker, expiry, strike, option_type, reference_price, source=source)
 
 def process_buy_fill(user_id: int, decision_id: int, ticker: str, expiry: str, strike: float, option_type: str, signal_action: str, fill_price: float, contracts: int, paper_mode: bool, order_id: str, conn=None):
     """
@@ -171,7 +158,7 @@ def process_buy_fill(user_id: int, decision_id: int, ticker: str, expiry: str, s
     return notifications
 
 
-def execute_trade(user_id: int, decision_id: int, alert_id: int, ticker: str, expiry: str, strike: float, option_type: str, signal_action: str, decision_action: str, recommended_price: float):
+def execute_trade(user_id: int, decision_id: int, alert_id: int, ticker: str, expiry: str, strike: float, option_type: str, signal_action: str, decision_action: str, recommended_price: float, contracts: int = None):
     """
     Routes the execution based on the user-specific decision engine's output (market_buy or limit_buy).
     Implements a circuit breaker that engages the kill switch globally after N consecutive errors.
@@ -189,7 +176,10 @@ def execute_trade(user_id: int, decision_id: int, alert_id: int, ticker: str, ex
         log_system_event('error', f"Live execution requested but Robinhood MCP is not integrated ({detail}); forcing paper mode", user_id=user_id)
         notify_error("Executor", f"Live trading requested but Robinhood MCP is not integrated ({detail}); falling back to paper mode", user_id=user_id)
         paper_mode = True
-    contracts = config.decision.get('contracts_per_signal', 1)
+    # Size comes from the decision engine, which applies the configured sizing
+    # mode. Falling back to config here would ignore dollar-based sizing.
+    if contracts is None:
+        contracts = config.decision.get('contracts_per_signal', 1)
     breaker_limit = config.execution.get('error_circuit_breaker_count', 3)
     
     order_id = f"sim_{uuid.uuid4().hex[:8]}" if paper_mode else "real_mcp_order_id"

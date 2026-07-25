@@ -37,6 +37,21 @@ def log_api_call(service, endpoint):
     finally:
         conn.close()
 
+def record_poller_heartbeat():
+    """Records the last successful poll pass. Without this a wedged poller and
+    an idle one look identical on the dashboard."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO system_state (key, value, updated_at)
+            VALUES ('poller_last_run', datetime('now', 'localtime'), datetime('now', 'localtime'))
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
 def check_quota_guardrail():
     conn = get_connection()
     try:
@@ -52,6 +67,13 @@ def check_quota_guardrail():
         conn.close()
     
     limit = system_config.polling.get("monthly_api_call_ceiling", 10000)
+
+    # Degrade cadence before the hard ceiling rather than stopping dead at it
+    # (spec 2.2). Slower polling for the rest of the month beats no polling.
+    degrade_at = system_config.polling.get("quota_degrade_pct", 80) / 100.0
+    degrade_factor = system_config.polling.get("quota_degrade_factor", 4)
+    slow_down = count >= limit * degrade_at
+
     if count >= limit * 0.95:
         # Debounced to once per day: this runs every poll pass, so an undebounced
         # warning would fire ~240x/hour on every channel until month rollover.
@@ -61,7 +83,7 @@ def check_quota_guardrail():
             _last_quota_warning_date = today_str
             notify_error("Poller", f"CRITICAL: Approaching Twitter API monthly quota ({count}/{limit})")
 
-    return count < limit
+    return count < limit, (degrade_factor if slow_down else 1)
 
 def start_poller():
     print("Starting Hermes Poller...")
@@ -115,10 +137,17 @@ def start_poller():
                 time.sleep(60)
                 continue
                 
-            if not check_quota_guardrail():
+            within_quota, cadence_multiplier = check_quota_guardrail()
+            if not within_quota:
                 print("Monthly API quota exceeded. Poller sleeping.")
                 time.sleep(3600)
                 continue
+            if cadence_multiplier > 1:
+                interval = interval * cadence_multiplier
+                print(f"Quota guardrail: polling slowed to {interval}s to preserve remaining calls.")
+
+            # Heartbeat so the dashboard can tell "idle" from "wedged".
+            record_poller_heartbeat()
 
             since_id = get_last_since_id()
             
@@ -187,11 +216,18 @@ def start_poller():
                             signal = parse_alert(tweet.text)
                             
                             # Save Alert to DB
+                            # Store when the tweet was posted (market time) so
+                            # signal-to-decision latency can be measured and the
+                            # staleness gate has a real reference point.
+                            tweet_created_at = None
+                            if getattr(tweet, 'created_at', None):
+                                tweet_created_at = tweet.created_at.astimezone(NY_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
                             cursor.execute("""
-                                INSERT INTO alerts (tweet_id, raw_text, action, ticker, expiry, strike, option_type, price, trade_style, parse_status)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            """, (str(tweet.id), tweet.text, signal.action, signal.ticker, signal.expiry, signal.strike, 
-                                  signal.option_type, signal.price, signal.trade_style, signal.parse_status))
+                                INSERT INTO alerts (tweet_id, raw_text, action, ticker, expiry, strike, option_type, price, trade_style, parse_status, tweet_created_at)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """, (str(tweet.id), tweet.text, signal.action, signal.ticker, signal.expiry, signal.strike,
+                                  signal.option_type, signal.price, signal.trade_style, signal.parse_status, tweet_created_at))
                             alert_id = cursor.lastrowid
                             conn.commit()
                         finally:

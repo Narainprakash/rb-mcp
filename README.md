@@ -13,6 +13,12 @@ Hermes is a self-hosted agent that polls an X (Twitter) account for options trad
 - **Circuit Breaker**: Automatically engages the kill switch after N consecutive execution errors (default 3) to prevent runaway failures.
 - **Stale Order Cleanup**: Automatically cancels unfilled limit buy orders after 24 hours to prevent orphaned orders.
 - **Expiry Reconciliation**: Positions past their expiry are closed out as `expired` with the premium booked as a realized loss, so they can't silently occupy your `max_open_positions` slots forever.
+- **Staleness Guard**: Signals older than `max_signal_age_sec` are skipped, so a restart after downtime doesn't replay a backlog of stale alerts at market.
+- **Daily Loss Cap**: Stops new entries once realized losses hit `max_daily_loss_usd`, while open positions keep being managed. Spend caps limit what you deploy; this limits what you can lose.
+- **Dollar-Based Sizing**: Optional `sizing_mode: dollars` derives contract count from a risk budget, so exposure doesn't swing 10x with the option's price.
+- **Soft Pause**: Stop opening new positions while still managing exits — via the `HALT_TRADING` file globally, or `trading_enabled` per user.
+- **Style & Ticker Filters**: Opt out of `0DTE`/`LOTTO` entirely, or restrict trading to an allow list.
+- **Signal Latency Tracking**: Records seconds from tweet posted to decision made, so you can tell whether your polling cadence is actually fast enough.
 - **Skip Transparency**: Every skipped alert notifies you with the reason — including risk-limit skips, so you always know when the bot has stopped trading because it hit your daily spend or open-position cap.
 - **Login Protection**: The dashboard locks out an IP after 5 failed logins in 5 minutes and records every failed attempt to the system event feed.
 - **Daily Summary Push**: A configurable end-of-day report (P/L, Trades, Alerts, Open Positions, API Calls) sent via WhatsApp/Telegram to each user.
@@ -149,6 +155,13 @@ To resume operations, simply remove the file:
 rm /home/rb-mcp-user/rb-mcp/HALT
 ```
 The loops re-check for the file every few seconds, so trading resumes within seconds of removing it — no service restart needed. The kill switch is global: it halts every user, by design.
+
+### Step 2.5.0: Pausing Without Halting Everything
+The full `HALT` file stops *everything*, including the monitor that exits your open positions — which can be worse than doing nothing if you're holding contracts. To stop opening new positions while still managing exits:
+```bash
+touch /home/rb-mcp-user/rb-mcp/HALT_TRADING
+```
+Remove it to resume entries. The dashboard shows `PAUSED (exits only)` while it's in place. The same pause is available per user via the `Trading enabled` toggle in dashboard settings.
 
 ### Step 2.5.1: Wiping the Database (Optional)
 If you ever want to perform a "clean slate" reset before a new trading day, you can safely delete the SQLite database. The system will automatically generate a pristine database file with the correct schema on its next startup:
@@ -575,6 +588,21 @@ WhatsApp targets (`whatsapp_trade_targets`, `whatsapp_forward_targets`) are alre
 
 ### 9.3 Adding a user is safe with respect to history
 The trade loop only considers alerts from the current NY trading day, so a user added mid-month will **not** retroactively trade weeks of stale signals. They start from the next alert.
+
+### 9.3.1 What users can configure
+Editable from the dashboard settings modal, stored per user in `user_configs`:
+
+| Setting | Effect | Guard |
+|---|---|---|
+| Contracts per signal, Max open positions, Price tolerance, Max daily/per-trade/per-position spend, Risk per signal | Exposure | Capped at the `config.yaml` ceiling — the UI can only tighten |
+| Take profit %, Limit buy discount % | Exit target / entry patience | Range-checked 0–100, not capped (higher is more conservative) |
+| Max daily loss, Max signal age | Loss and staleness guards | Validated only; lowering tightens risk |
+| Trading enabled | Soft pause — stops new entries, keeps managing exits | Boolean |
+| Sizing mode | `contracts` (fixed count) or `dollars` (budget-derived) | Must be one of the two |
+| Skip trade styles | Opt out of `0DTE`, `SWING`, `DAYTRADE`, `LOTTO` | Validated against known styles |
+| Allowed / blocked tickers | Restrict the tradeable universe | Uppercased; empty allow list means all |
+
+**Not user-settable, by design:** `paper_mode` (going live is a `config.yaml` edit plus a restart), and anything touching the shared X poll — cadence, windows, `target_account`, `include_retweets`, quota thresholds. All users share one monthly API quota, so one user changing the cadence would spend everyone else's budget.
 
 ### 9.4 ⚠️ Per-user Robinhood routing is not implemented
 `users.robinhood_account_id` exists and is read when a live order is attempted, but there is no Robinhood MCP call to route it to yet (see the warning in Section 4.4). Until that lands, all users would share whichever single account the MCP session is authenticated against.

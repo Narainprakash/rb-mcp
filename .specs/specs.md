@@ -205,6 +205,14 @@ else:
 - When a limit sell fills, log the realized P/L, update the position status to `closed`, and send a Discord notification.
 - **0DTE End of Day Rule**: If a limit sell order for a `0DTE` option is still open at a configurable cutoff time (default 15:50 ET), the Executor must cancel the limit sell and immediately execute a **Market Sell** to salvage any remaining premium.
 
+**Signal staleness gate.** A decision is only valid close to the moment the signal was posted. `max_signal_age_sec` (default 120) skips any alert older than that, logging the skip so it is not retried. This matters most after downtime: systemd restarts the service into a backlog of undecided alerts from the outage window, and without this gate it would open positions at market on 0DTE contracts that are minutes or hours stale. The day-bound query prevents historical backfill; this prevents same-day replay.
+
+**Position sizing.** `sizing_mode` selects between `contracts` (fixed count, the default) and `dollars`. Fixed-count sizing means risk per signal swings with the option's price — one contract is $50 at $0.50 and $500 at $5.00. In `dollars` mode the count is derived from `risk_per_signal_usd`, normalising exposure across signals; if the budget cannot cover a single contract the signal is skipped rather than rounded up.
+
+**Loss cap.** `max_daily_spend_usd` limits what gets deployed, not what gets lost — with no stop-loss by design, a full day's spend can become a full day's loss. `max_daily_loss_usd` closes that gap: once realized losses today reach it, new entries stop while open positions continue to be managed. Set to 0 to disable.
+
+**Per-user filters.** `trading_enabled` is a soft pause (see Section 9.1), `skip_trade_styles` opts out of styles entirely (`0DTE` and `LOTTO` being the obvious candidates), and `allowed_tickers`/`blocked_tickers` constrain the universe. Style is otherwise informational per Section 3.1; this is the one place it affects decisioning.
+
 Configurable parameters (Section 8), not hardcoded:
 - `price_tolerance_pct` (default 10%) — max acceptable markup for a market buy.
 - `limit_buy_discount_pct` (default 20%) — discount target for a limit buy when the market is cheaper than the alert.
@@ -235,7 +243,9 @@ Every decision (buy / skip / needs-review) is logged with the reasoning fields (
 
 **Implementation status (as of 2026-07-24):** `src/services/executor.py` does not yet call the real Robinhood Agentic Trading MCP, and no order-placement tool is wired in. Per the "fail loudly/safely into paper mode" requirement above, `execute_trade()` detects `paper_mode: false`, resolves the user's `robinhood_account_id` for the log line, and forces the trade back to paper mode (logging a `system_events` entry and sending an `error` notification) rather than silently faking a live fill. **Setting `execution.paper_mode: false` currently has no live-trading effect** until real MCP wiring is added. GTC-vs-Day order duration and exponential-backoff retry on limit-sell placement are also not yet implemented.
 
-**Quote source — read this before trusting any paper-mode number.** `get_live_quote(ticker, expiry, strike, option_type, reference_price)` is a *simulator*, not market data. It derives a bid/ask deterministically from `reference_price` (the alert price on entry, the position's average cost on exit) plus a drift that is a pure function of the contract and the current minute. This makes paper runs reproducible and keeps quotes anchored to the contract actually being traded, but **simulated fills and simulated P/L carry no information about how the strategy would perform on real prices.** Paper mode currently validates the *plumbing* — parse → decide → position ledger → take-profit → exit — not the strategy. The 1–2 week paper-validation step in Section 10 only becomes meaningful once this function is backed by real MCP quotes.
+**Quote source — read this before trusting any paper-mode number.** Quoting is pluggable via `execution.quote_source`, with providers registered in `src/services/quotes.py`. Quoting and order execution are separable concerns: a read-only feed can be wired up long before order placement is, and doing so is what makes a paper run mean anything. A provider that cannot supply a price raises `QuoteUnavailable` and the signal is skipped — it never falls back to an invented price. The `robinhood` provider is registered but unimplemented (see below); the default `simulated` provider is *not* market data.
+
+The simulated provider derives a bid/ask deterministically from `reference_price`, and It derives a bid/ask deterministically from `reference_price` (the alert price on entry, the position's average cost on exit) plus a drift that is a pure function of the contract and the current minute. This makes paper runs reproducible and keeps quotes anchored to the contract actually being traded, but **simulated fills and simulated P/L carry no information about how the strategy would perform on real prices.** Paper mode currently validates the *plumbing* — parse → decide → position ledger → take-profit → exit — not the strategy. The 1–2 week paper-validation step in Section 10 only becomes meaningful once this function is backed by real MCP quotes.
 
 **Transaction discipline.** `process_open_orders()` runs its whole pass in **one transaction on one connection**, and `process_buy_fill()` accepts that connection via its `conn` argument. This is not stylistic: SQLite in WAL mode permits a single writer, so a nested connection writing while the outer transaction is open blocks until the busy timeout and then raises `database is locked`, discarding the entire uncommitted pass. Two rules follow, and both must hold for any new code on this path:
 - **Never open a second connection inside an open transaction.** Write `system_events` rows on the caller's cursor, not via `log_system_event()`.
@@ -300,7 +310,8 @@ Config: webhook URL, per-event-type on/off toggles, and a rate limit (so a burst
 - **Positions** — open positions, unrealized P/L (needs a periodic price-refresh job)
 - **Trade history** — closed trades, realized P/L, win rate, filterable by ticker/date/paper-vs-live
 - **Cost & Quota tracking** — X API pulls used vs monthly limit (e.g. 140 / 10,000). No LLM token tracking needed (parsing is regex-based).
-- **System health** — poller last-run timestamp per window, kill switch status, service uptime
+- **System health** — poller last-run heartbeat (from `system_state`, so a wedged poller is distinguishable from one idling outside market hours), kill switch status (`active` / `paused` / `halted`), service uptime
+- **Signal latency** — seconds from tweet posted to decision made, stored on `decisions.latency_sec` and shown per item in the live feed. This is what tells you whether the polling cadence in Section 2.1 is actually fast enough, rather than assuming it is
 - **Daily Summary** — automated daily push notification containing: Date, PAPER/LIVE mode flag, Realized P/L, Win Rate (%), Trades Executed, Alerts Parsed, Open Positions, and X API Quota.
 
 ### 7.3 Access & External Exposure
@@ -313,8 +324,12 @@ Config: webhook URL, per-event-type on/off toggles, and a rate limit (so a burst
   4. Alternatively, if you don't have a domain: use HTTP Basic Auth over a WireGuard/Tailscale VPN.
 - Do **not** expose the dashboard port directly via VPS firewall rules — no open ports beyond SSH.
 - `POST /api/settings` is the one write path, and it is deliberately narrow. It accepts **only** the `decision` keys listed below and ignores everything else, so the web UI can never flip `paper_mode` or touch any `execution` setting — going live stays a `config.yaml` edit plus a service restart.
-  - Capped at the `config.yaml` value (raising these increases exposure, so the UI can only tighten): `contracts_per_signal`, `price_tolerance_pct`, `max_daily_spend_usd`, `max_open_positions`.
+  - Capped at the `config.yaml` value (raising these increases exposure, so the UI can only tighten): `contracts_per_signal`, `price_tolerance_pct`, `max_daily_spend_usd`, `max_open_positions`, `per_trade_max_spend_usd`, `max_spend_per_position_usd`, `risk_per_signal_usd`.
   - Range-checked to 0–100 but not capped (raising these is the *more* conservative choice): `take_profit_pct`, `limit_buy_discount_pct`.
+  - Validated but uncapped, because lowering them tightens risk: `max_signal_age_sec`, `max_daily_loss_usd`.
+  - Non-numeric, validated against a known set: `trading_enabled` (soft pause), `sizing_mode`, `skip_trade_styles`, `allowed_tickers`, `blocked_tickers`.
+
+  **Anything touching the shared X poll stays system-level and is deliberately not settable per user** — cadence, windows, `target_account`, `include_retweets`, quota thresholds. All tenants share one monthly API quota, so letting one user tighten their cadence would spend everyone else's budget.
 - Flask must run with `debug: false` in every deployed environment — the interactive debugger is a remote-code-execution risk on any externally-reachable instance. Set a real `dashboard.secret_key` in `config.yaml` (or a `DASHBOARD_SECRET_KEY` env var); if left unset, the app now falls back to a random key generated at process start rather than a hardcoded default, meaning sessions won't survive a restart until you configure one.
 
 ---
@@ -421,7 +436,9 @@ Treat this section as non-negotiable regardless of how the rest gets built.
 1. **Global halt file** — the simplest and most robust: every loop checks for the existence of a file (e.g. `HALT`) in the project root. If found, the loop waits in place — re-checking the file every few seconds — rather than exiting. This instantly stops all trading while keeping the process alive (preventing systemd restart loops), even if the agent or Discord is broken, and means **removing the file resumes trading without a service restart**. This should be your primary, always-available switch.
 2. **Hermes Agent conversational kill switch** — You message the agent via Telegram, Discord, or CLI: *"Stop all trading immediately."* The agent calls the `trigger_kill_switch()` custom tool which creates the `HALT` file. This is the most user-friendly path and works from anywhere with a phone signal. It depends on the agent process being healthy, so treat it as secondary to #1.
 3. **Robinhood-side disconnect** — Robinhood's own agentic trading product includes an account-level disconnect/pause control as a third, independent layer outside Hermes entirely — worth knowing that even if your VPS is fully compromised, you can cut Hermes off from your Robinhood funds directly in the Robinhood app.
-4. **Granular halts** — separate flags for "stop new trades" vs "stop polling" vs "stop everything," since e.g. you might want to keep watching for alerts and logging without letting anything execute.
+4. **Granular halts** — separate flags for "stop new trades" vs "stop polling" vs "stop everything," since e.g. you might want to keep watching for alerts and logging without letting anything execute. Implemented at two levels:
+   - **`HALT_TRADING` file** (global): the poller and the exit monitor keep running, but no new positions are opened. This is usually the switch you actually want — the full `HALT` also stops exit management, which can be worse than doing nothing while positions are open.
+   - **`decision.trading_enabled: false`** (per user): the same soft pause scoped to one tenant, settable from the dashboard.
 
 ### 9.2 Access Controls
 

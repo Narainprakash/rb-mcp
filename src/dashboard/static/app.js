@@ -33,13 +33,28 @@ document.addEventListener("DOMContentLoaded", () => {
                 currentSettings = await res.json();
                 
                 // Populate UI
-                document.getElementById('set_contracts_per_signal').value = currentSettings.decision?.contracts_per_signal ?? 1;
-                document.getElementById('set_take_profit_pct').value = currentSettings.decision?.take_profit_pct ?? 20;
-                document.getElementById('set_price_tolerance_pct').value = currentSettings.decision?.price_tolerance_pct ?? 10;
-                document.getElementById('set_limit_buy_discount_pct').value = currentSettings.decision?.limit_buy_discount_pct ?? 20;
-                document.getElementById('set_max_daily_spend_usd').value = currentSettings.decision?.max_daily_spend_usd ?? 5000;
-                document.getElementById('set_max_open_positions').value = currentSettings.decision?.max_open_positions ?? 10;
-                
+                const d = currentSettings.decision ?? {};
+                document.getElementById('set_contracts_per_signal').value = d.contracts_per_signal ?? 1;
+                document.getElementById('set_take_profit_pct').value = d.take_profit_pct ?? 20;
+                document.getElementById('set_price_tolerance_pct').value = d.price_tolerance_pct ?? 10;
+                document.getElementById('set_limit_buy_discount_pct').value = d.limit_buy_discount_pct ?? 20;
+                document.getElementById('set_max_daily_spend_usd').value = d.max_daily_spend_usd ?? 5000;
+                document.getElementById('set_max_open_positions').value = d.max_open_positions ?? 10;
+                document.getElementById('set_max_daily_loss_usd').value = d.max_daily_loss_usd ?? 0;
+                document.getElementById('set_max_signal_age_sec').value = d.max_signal_age_sec ?? 120;
+                document.getElementById('set_per_trade_max_spend_usd').value = d.per_trade_max_spend_usd ?? 500;
+                document.getElementById('set_max_spend_per_position_usd').value = d.max_spend_per_position_usd ?? 1000;
+                document.getElementById('set_sizing_mode').value = d.sizing_mode ?? 'contracts';
+                document.getElementById('set_risk_per_signal_usd').value = d.risk_per_signal_usd ?? 250;
+                document.getElementById('set_trading_enabled').checked = d.trading_enabled ?? true;
+
+                const skipStyles = d.skip_trade_styles ?? [];
+                document.querySelectorAll('.skip-style').forEach(cb => {
+                    cb.checked = skipStyles.includes(cb.value);
+                });
+                document.getElementById('set_allowed_tickers').value = (d.allowed_tickers ?? []).join(', ');
+                document.getElementById('set_blocked_tickers').value = (d.blocked_tickers ?? []).join(', ');
+
                 settingsModal.style.display = 'flex';
             } catch (e) {
                 console.error("Failed to fetch settings", e);
@@ -61,12 +76,30 @@ document.addEventListener("DOMContentLoaded", () => {
                 // ignores anything else and clamps these to the system ceilings.
                 if (!currentSettings.decision) currentSettings.decision = {};
 
-                currentSettings.decision.contracts_per_signal = parseInt(document.getElementById('set_contracts_per_signal').value) || 1;
-                currentSettings.decision.take_profit_pct = parseInt(document.getElementById('set_take_profit_pct').value) || 20;
-                currentSettings.decision.price_tolerance_pct = parseInt(document.getElementById('set_price_tolerance_pct').value) || 10;
-                currentSettings.decision.limit_buy_discount_pct = parseInt(document.getElementById('set_limit_buy_discount_pct').value) || 20;
-                currentSettings.decision.max_daily_spend_usd = parseInt(document.getElementById('set_max_daily_spend_usd').value) || 5000;
-                currentSettings.decision.max_open_positions = parseInt(document.getElementById('set_max_open_positions').value) || 10;
+                const dec = currentSettings.decision;
+                dec.contracts_per_signal = parseInt(document.getElementById('set_contracts_per_signal').value) || 1;
+                dec.take_profit_pct = parseInt(document.getElementById('set_take_profit_pct').value) || 20;
+                dec.price_tolerance_pct = parseInt(document.getElementById('set_price_tolerance_pct').value) || 10;
+                dec.limit_buy_discount_pct = parseInt(document.getElementById('set_limit_buy_discount_pct').value) || 20;
+                dec.max_daily_spend_usd = parseInt(document.getElementById('set_max_daily_spend_usd').value) || 5000;
+                dec.max_open_positions = parseInt(document.getElementById('set_max_open_positions').value) || 10;
+                dec.per_trade_max_spend_usd = parseInt(document.getElementById('set_per_trade_max_spend_usd').value) || 500;
+                dec.max_spend_per_position_usd = parseInt(document.getElementById('set_max_spend_per_position_usd').value) || 1000;
+                dec.risk_per_signal_usd = parseInt(document.getElementById('set_risk_per_signal_usd').value) || 250;
+                dec.sizing_mode = document.getElementById('set_sizing_mode').value;
+                dec.trading_enabled = document.getElementById('set_trading_enabled').checked;
+
+                // 0 is meaningful for these (disables the guard), so don't use || .
+                const lossCap = parseInt(document.getElementById('set_max_daily_loss_usd').value);
+                dec.max_daily_loss_usd = Number.isNaN(lossCap) ? 0 : lossCap;
+                const maxAge = parseInt(document.getElementById('set_max_signal_age_sec').value);
+                dec.max_signal_age_sec = Number.isNaN(maxAge) ? 0 : maxAge;
+
+                dec.skip_trade_styles = Array.from(document.querySelectorAll('.skip-style:checked')).map(cb => cb.value);
+                const parseTickers = (id) => document.getElementById(id).value
+                    .split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+                dec.allowed_tickers = parseTickers('set_allowed_tickers');
+                dec.blocked_tickers = parseTickers('set_blocked_tickers');
 
                 const res = await fetch('/api/settings', {
                     method: 'POST',
@@ -132,9 +165,19 @@ async function fetchHealth() {
         if (data.status === 'active') {
             dot.className = 'dot green';
             text.textContent = 'Active';
+        } else if (data.status === 'paused') {
+            dot.className = 'dot yellow';
+            text.textContent = 'PAUSED (exits only)';
         } else {
             dot.className = 'dot red';
             text.textContent = 'HALTED';
+        }
+
+        // Poller heartbeat: distinguishes "idle outside market hours" from "wedged".
+        if (data.poller_age_sec !== null && data.poller_age_sec !== undefined) {
+            text.title = `Poller last ran ${data.poller_age_sec}s ago (${data.poller_last_run})`;
+        } else {
+            text.title = 'Poller has not reported a run yet';
         }
         
         // Mode Badge
@@ -285,6 +328,9 @@ async function fetchFeed() {
                 body = item.raw_text ? escapeHtml(item.raw_text.substring(0, 100)) + '...' : "No text available";
             } else if (item.reasoning) {
                 body = `Decision: ${item.action_taken.toUpperCase()} - ${escapeHtml(item.reasoning)}`;
+                if (item.latency_sec !== null && item.latency_sec !== undefined) {
+                    body += ` <span style="color:var(--text-secondary)">(${Number(item.latency_sec).toFixed(1)}s after post)</span>`;
+                }
             }
             if (item.trade_status) {
                 const mode = item.paper_mode ? "(Paper)" : "(LIVE)";
