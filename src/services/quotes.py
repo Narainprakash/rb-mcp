@@ -57,11 +57,24 @@ def _robinhood_quote(ticker, expiry, strike, option_type, reference_price):
     long-term source, since quoting the same venue we execute on removes any
     basis risk between the decision price and the fill price.
 
-    Not implemented yet, and blocked on two things (specs.md section 0.2):
-    options support on the MCP is unconfirmed, and the MCP is an agent-tool
-    interface bound to the Hermes Agent's OAuth session rather than a REST API
-    this process can call. Fails closed rather than falling back to simulated
-    prices, so a misconfiguration cannot quietly trade on invented data.
+    Not implemented yet. Two blockers, one of them now confirmed:
+
+    1. Options support on the MCP is unconfirmed (specs.md section 0.2).
+    2. There is no way for this process to invoke an MCP tool. Checked against
+       the CLI on 2026-07-25: `hermes mcp` offers only connection management
+       (add / remove / list / test / configure / login / reauth / catalog /
+       install / serve) with no call or invoke subcommand, so the shell-out
+       route used for `hermes send` does not exist for MCP tools. `serve` is
+       the reverse direction - it exposes Hermes to other agents.
+
+    The remaining viable path is a real MCP client in this process, reusing the
+    OAuth token the agent has already cached. Do NOT route quotes or orders
+    through the agent conversationally (`hermes send` and parse the reply):
+    that puts an LLM in the deterministic trading path, which section 1 of the
+    spec exists to prevent, and would make a hallucinated price into a trade.
+
+    Fails closed rather than falling back to simulated prices, so a
+    misconfiguration cannot quietly trade on invented data.
     """
     raise QuoteUnavailable(
         "quote_source 'robinhood' is not implemented yet - no MCP client in this process. "
