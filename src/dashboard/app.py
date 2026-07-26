@@ -70,6 +70,15 @@ def _resolve_secret_key():
 
 app.secret_key = _resolve_secret_key()
 
+# The dashboard often starts before the trading service, and it is where the
+# "Needs login" status is read from - so it also adopts a leftover pre-per-user
+# token rather than reporting a login that exists as missing.
+try:
+    from src.services.robinhood_auth import migrate_legacy_token
+    migrate_legacy_token()
+except Exception as e:
+    print(f"WARNING: Robinhood token migration check failed: {e}")
+
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'

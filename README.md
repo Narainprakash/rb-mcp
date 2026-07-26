@@ -473,7 +473,9 @@ Check who has authorized — the dashboard's Robinhood MCP card shows the logged
 ls -la ~/rb-mcp/.robinhood_token.*.json
 ```
 
-> **Upgrading from the single-login version:** if a legacy `.robinhood_token.json` exists and there is exactly one user, it is adopted for that user automatically on the next login or restart. With several users its owner is ambiguous, so it is left alone and everyone re-authorizes.
+> **Upgrading from the single-login version:** if a legacy `.robinhood_token.json` exists and there is exactly one user, it is adopted for that user automatically when either service starts, or when you run the login script — no re-authorization needed. With several users its owner is ambiguous, so it is left alone and everyone re-authorizes.
+>
+> If the dashboard says **Needs login** right after upgrading, the migration hasn't run yet. Restart both services, or just run the login command above — it adopts the existing token without a browser round-trip.
 
 > **Why not reuse the agent's token?** It exists at `~/.hermes/mcp-tokens/robinhood.json`, but OAuth refresh tokens are typically single-use and rotating — refreshing it from the bot would invalidate the agent's copy and silently break your Telegram/WhatsApp Robinhood access. A separate registration avoids that race.
 

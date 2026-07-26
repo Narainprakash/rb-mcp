@@ -184,6 +184,16 @@ if __name__ == "__main__":
     print("Initializing Database...")
     init_db()
     check_secret_file_permissions()
+
+    # Adopt a pre-per-user Robinhood token, if one is left over. Doing this at
+    # startup is what makes "migrates on the next restart" true - previously it
+    # only happened inside robinhood_login.py, so an upgraded install silently
+    # lost its credentials until someone re-ran the login.
+    try:
+        from src.services.robinhood_auth import migrate_legacy_token
+        migrate_legacy_token()
+    except Exception as e:
+        print(f"WARNING: Robinhood token migration check failed: {e}")
     
     print("Starting Background Threads...")
     # Start poller thread
