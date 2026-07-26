@@ -62,6 +62,7 @@ def get_live_quote(ticker, expiry, strike, option_type, reference_price, user_id
         source=execution.get('quote_source', 'simulated'),
         cache_ttl_sec=system_execution.get('quote_cache_ttl_sec', 10),
         max_calls_per_min=system_execution.get('broker_rate_limit_per_min', 60),
+        user_id=user_id,
     )
 
 def process_buy_fill(user_id: int, decision_id: int, ticker: str, expiry: str, strike: float, option_type: str, signal_action: str, fill_price: float, contracts: int, paper_mode: bool, order_id: str, conn=None):
@@ -203,7 +204,7 @@ def execute_trade(user_id: int, decision_id: int, alert_id: int, ticker: str, ex
             
             # In live mode, this MUST be routed to Robinhood as a Limit Buy at max_price.
             # In paper mode, we simulate checking the current ask:
-            quote = get_live_quote(ticker, expiry, strike, option_type, recommended_price)
+            quote = get_live_quote(ticker, expiry, strike, option_type, recommended_price, user_id=user_id)
             if quote['ask'] <= max_price:
                 # Immediate fill. process_buy_fill owns its transaction here and
                 # fires its own notifications after committing.

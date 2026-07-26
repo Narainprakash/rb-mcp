@@ -41,11 +41,16 @@ def _remember(ticker, expiry, strike, option_type, instrument_id):
         conn.close()
 
 
-def resolve_instrument_id(ticker, expiry, strike, option_type):
+def resolve_instrument_id(ticker, expiry, strike, option_type, user_id):
     """Returns the option instrument UUID, or raises MCPCallFailed.
 
     `expiry` is ISO (YYYY-MM-DD) as stored on alerts; `option_type` is the
     parser's 'C'/'P', mapped here to the API's 'call'/'put'.
+
+    The lookup is billed to `user_id`'s Robinhood login, but the *result* is
+    cached globally: an option's instrument UUID is a property of the contract,
+    identical for every account, so re-resolving it per user would waste calls
+    against a shared budget.
     """
     cached = _cached(ticker, expiry, strike, option_type)
     if cached:
@@ -63,7 +68,7 @@ def resolve_instrument_id(ticker, expiry, strike, option_type):
         "type": api_type,
         "state": "active",
         "tradability": "tradable",
-    })
+    }, user_id=user_id)
 
     instruments = data.get("instruments") if isinstance(data, dict) else data
     if not isinstance(instruments, list) or not instruments:

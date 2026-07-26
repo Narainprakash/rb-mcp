@@ -25,7 +25,7 @@ class QuoteUnavailable(Exception):
     treat this as 'do not trade', never as a reason to guess a price."""
 
 
-def _simulated_quote(ticker, expiry, strike, option_type, reference_price):
+def _simulated_quote(ticker, expiry, strike, option_type, reference_price, user_id=None):
     """
     SIMULATED quote source. This is NOT market data.
 
@@ -51,18 +51,26 @@ def _simulated_quote(ticker, expiry, strike, option_type, reference_price):
     return {"bid": round(mid - spread / 2, 2), "ask": round(mid + spread / 2, 2)}
 
 
-def _robinhood_quote(ticker, expiry, strike, option_type, reference_price):
+def _robinhood_quote(ticker, expiry, strike, option_type, reference_price, user_id=None):
     """Real quotes from the Robinhood Agentic Trading MCP.
 
     `reference_price` is unused here - it exists for the simulated provider.
     Real prices come from the broker, which is the entire point.
+
+    Requires `user_id`: each tenant authenticates with their own Robinhood
+    login, so there is no sensible default to fall back on.
     """
     from src.services.robinhood_instruments import resolve_instrument_id
     from src.services.robinhood_mcp import MCPCallFailed, call_tool
 
+    if user_id is None:
+        raise QuoteUnavailable(
+            "the robinhood quote source needs a user_id; each user has their own login"
+        )
+
     try:
-        instrument_id = resolve_instrument_id(ticker, expiry, strike, option_type)
-        data = call_tool("get_option_quotes", {"instrument_ids": [instrument_id]})
+        instrument_id = resolve_instrument_id(ticker, expiry, strike, option_type, user_id)
+        data = call_tool("get_option_quotes", {"instrument_ids": [instrument_id]}, user_id=user_id)
     except MCPCallFailed as e:
         # Surfaced as QuoteUnavailable so the caller skips the signal. Never
         # fall back to a simulated price: silently trading on invented data is
@@ -131,7 +139,7 @@ def clear_cache():
 
 
 def get_quote(ticker, expiry, strike, option_type, reference_price,
-              source="simulated", cache_ttl_sec=0, max_calls_per_min=None):
+              source="simulated", cache_ttl_sec=0, max_calls_per_min=None, user_id=None):
     """Returns {'bid': float, 'ask': float} from the configured provider.
 
     For network-backed providers the call is deduplicated through a short-TTL
@@ -150,8 +158,11 @@ def get_quote(ticker, expiry, strike, option_type, reference_price,
 
     meta = provider_meta(source)
     if not meta.get("live_data"):
-        return provider(ticker, expiry, strike, option_type, reference_price)
+        return provider(ticker, expiry, strike, option_type, reference_price, user_id)
 
+    # Cached per contract, not per user: a bid/ask is a property of the market,
+    # identical for every account, so re-fetching it for each tenant would spend
+    # the shared budget for the same answer.
     key = _cache_key(ticker, expiry, strike, option_type)
     now = time.monotonic()
 
@@ -170,7 +181,7 @@ def get_quote(ticker, expiry, strike, option_type, reference_price,
         raise QuoteUnavailable(str(e))
 
     log_broker_call(f"quote:{ticker}{strike}{option_type}")
-    quote = provider(ticker, expiry, strike, option_type, reference_price)
+    quote = provider(ticker, expiry, strike, option_type, reference_price, user_id)
 
     if cache_ttl_sec > 0:
         with _cache_lock:

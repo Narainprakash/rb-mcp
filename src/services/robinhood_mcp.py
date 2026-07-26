@@ -46,27 +46,32 @@ def _background_loop():
         return _loop
 
 
-async def _call_async(tool_name, arguments):
+async def _call_async(tool_name, arguments, user_id):
     from mcp import ClientSession
     from mcp.client.streamable_http import streamablehttp_client
     from src.services.robinhood_auth import build_oauth_provider
 
-    auth = build_oauth_provider()
+    auth = build_oauth_provider(user_id)
     async with streamablehttp_client(MCP_URL, auth=auth) as (read, write, _):
         async with ClientSession(read, write) as session:
             await session.initialize()
             return await session.call_tool(tool_name, arguments)
 
 
-def call_tool(tool_name, arguments, max_calls_per_min=None, timeout=45):
-    """Calls an MCP tool and returns the decoded JSON payload.
+def call_tool(tool_name, arguments, user_id, max_calls_per_min=None, timeout=45):
+    """Calls an MCP tool as `user_id` and returns the decoded JSON payload.
+
+    `user_id` is required, not optional: tenants are different people with
+    their own Robinhood logins, so a default would silently route one user's
+    calls through another's broker credentials.
 
     Raises MCPCallFailed on any problem - including a refused rate-limit
     reservation, so exhausting the budget can never be mistaken for a bad quote.
     """
-    if not have_credentials():
+    if not have_credentials(user_id):
         raise MCPCallFailed(
-            "not authenticated to Robinhood; run scripts/robinhood_login.py"
+            f"user {user_id} is not authenticated to Robinhood; "
+            "run scripts/robinhood_login.py --user <username>"
         )
 
     try:
@@ -78,7 +83,7 @@ def call_tool(tool_name, arguments, max_calls_per_min=None, timeout=45):
     _log_call(tool_name)
 
     loop = _background_loop()
-    future = asyncio.run_coroutine_threadsafe(_call_async(tool_name, arguments), loop)
+    future = asyncio.run_coroutine_threadsafe(_call_async(tool_name, arguments, user_id), loop)
     try:
         result = future.result(timeout=timeout)
     except Exception as e:
@@ -121,7 +126,7 @@ def _log_call(endpoint):
         print(f"WARNING: could not log broker API call: {e}")
 
 
-def account_is_tradeable(account_number):
+def account_is_tradeable(account_number, user_id):
     """Checks the preconditions the tool docs require before any order.
 
     `place_option_order` and `review_option_order` both state: the account must
@@ -132,7 +137,7 @@ def account_is_tradeable(account_number):
     Returns (ok, reason).
     """
     try:
-        data = call_tool("get_accounts", {})
+        data = call_tool("get_accounts", {}, user_id=user_id)
     except MCPCallFailed as e:
         return False, str(e)
 

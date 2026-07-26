@@ -152,7 +152,7 @@ def robinhood_status(user_config, user_id):
     # integrated" when the agent visibly works reads as a bug, so name the state.
     try:
         from src.services.robinhood_auth import have_credentials
-        logged_in = have_credentials()
+        logged_in = have_credentials(user_id)
     except Exception:
         logged_in = False
 

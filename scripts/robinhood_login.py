@@ -24,12 +24,53 @@ from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from src.core.db import get_connection, init_db  # noqa: E402
 from src.services.robinhood_auth import (  # noqa: E402
     MCP_URL,
     REDIRECT_URI,
-    TOKEN_PATH,
     build_oauth_provider,
+    migrate_legacy_token,
+    token_path,
 )
+
+
+def resolve_user(username):
+    """Maps a username to its id, listing the options when it is ambiguous.
+
+    Credentials are per user because tenants are different people with their
+    own Robinhood logins - so this refuses to guess rather than authorizing
+    someone against the wrong account.
+    """
+    init_db()
+    conn = get_connection()
+    try:
+        users = conn.execute(
+            "SELECT id, username FROM users WHERE is_active = 1 ORDER BY id"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not users:
+        raise SystemExit(
+            "No users exist yet. Create one first:\n"
+            "  venv/bin/python scripts/add_user.py"
+        )
+
+    if username:
+        for user in users:
+            if user["username"] == username:
+                return user["id"], user["username"]
+        names = ", ".join(u["username"] for u in users)
+        raise SystemExit(f"No active user named '{username}'. Known users: {names}")
+
+    if len(users) == 1:
+        return users[0]["id"], users[0]["username"]
+
+    names = "\n".join(f"  --user {u['username']}" for u in users)
+    raise SystemExit(
+        "Several users exist, so the login target is ambiguous. Re-run with one of:\n"
+        + names
+    )
 
 
 async def show_authorization_url(url: str) -> None:
@@ -62,15 +103,21 @@ async def read_redirect_url() -> tuple:
     return code, query.get("state", [None])[0]
 
 
-async def main() -> int:
+async def main(username=None) -> int:
     from mcp import ClientSession
     from mcp.client.streamable_http import streamablehttp_client
 
+    migrate_legacy_token()
+    user_id, resolved_name = resolve_user(username)
+
     print("Robinhood MCP login")
     print(f"  Server: {MCP_URL}")
-    print(f"  Tokens will be written to: {TOKEN_PATH} (mode 0600)")
+    print(f"  Authorizing as dashboard user: {resolved_name} (id {user_id})")
+    print(f"  Tokens will be written to: {token_path(user_id)} (mode 0600)")
+    print("  This login belongs to this user alone - other users authorize separately.")
 
     auth = build_oauth_provider(
+        user_id,
         redirect_handler=show_authorization_url,
         callback_handler=read_redirect_url,
     )
@@ -104,8 +151,14 @@ async def main() -> int:
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Authorize a dashboard user against Robinhood.")
+    parser.add_argument("--user", help="Dashboard username. Optional when only one user exists.")
+    args = parser.parse_args()
+
     try:
-        sys.exit(asyncio.run(main()))
+        sys.exit(asyncio.run(main(args.user)))
     except KeyboardInterrupt:
         print("\nAborted.")
         sys.exit(130)

@@ -30,7 +30,55 @@ import os
 MCP_URL = "https://agent.robinhood.com/mcp/trading"
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-TOKEN_PATH = os.path.join(PROJECT_ROOT, ".robinhood_token.json")
+
+# Credentials are per dashboard user: tenants are different people with their
+# own Robinhood logins, so one process-wide token would route everyone's orders
+# to whoever happened to authorize first.
+LEGACY_TOKEN_PATH = os.path.join(PROJECT_ROOT, ".robinhood_token.json")
+
+
+def token_path(user_id):
+    return os.path.join(PROJECT_ROOT, f".robinhood_token.{int(user_id)}.json")
+
+
+def migrate_legacy_token():
+    """Adopts a pre-per-user token file, when it is unambiguous who owns it.
+
+    The original design wrote one .robinhood_token.json for the whole process.
+    Claiming it for a specific user is only safe when exactly one user exists;
+    with several, there is no way to know who authorized it, so it is left in
+    place and those users simply log in again.
+
+    Returns the user_id it was migrated to, or None.
+    """
+    if not os.path.exists(LEGACY_TOKEN_PATH):
+        return None
+
+    from src.core.db import get_connection
+    conn = get_connection()
+    try:
+        users = conn.execute("SELECT id FROM users ORDER BY id").fetchall()
+    finally:
+        conn.close()
+
+    if len(users) != 1:
+        print(f"NOTE: {LEGACY_TOKEN_PATH} predates per-user credentials and there "
+              f"are {len(users)} users, so its owner is ambiguous. Leaving it alone - "
+              "each user should run scripts/robinhood_login.py --user <name>.")
+        return None
+
+    user_id = users[0]["id"]
+    destination = token_path(user_id)
+    if os.path.exists(destination):
+        return None
+
+    os.replace(LEGACY_TOKEN_PATH, destination)
+    try:
+        os.chmod(destination, 0o600)
+    except OSError:
+        pass
+    print(f"Migrated Robinhood credentials to {os.path.basename(destination)} (user {user_id}).")
+    return user_id
 
 # The authorization server rejects unregistered redirect URIs, and the dashboard
 # already owns 8420. Nothing listens here: the headless flow has you paste the
@@ -56,8 +104,8 @@ class FileTokenStorage:
     restarts on failure.
     """
 
-    def __init__(self, path=TOKEN_PATH):
-        self.path = path
+    def __init__(self, user_id):
+        self.path = token_path(user_id)
 
     def _load(self):
         if not os.path.exists(self.path):
@@ -101,18 +149,20 @@ def client_metadata():
     )
 
 
-def have_credentials():
-    """Whether a login has been completed. Cheap enough for a status card."""
-    data = FileTokenStorage()._load()
+def have_credentials(user_id):
+    """Whether this user has completed a login. Cheap enough for a status card."""
+    if user_id is None:
+        return False
+    data = FileTokenStorage(user_id)._load()
     return bool(data.get("tokens", {}).get("access_token"))
 
 
-def build_oauth_provider(redirect_handler=None, callback_handler=None):
+def build_oauth_provider(user_id, redirect_handler=None, callback_handler=None):
     from mcp.client.auth import OAuthClientProvider
     return OAuthClientProvider(
         server_url=MCP_URL,
         client_metadata=client_metadata(),
-        storage=FileTokenStorage(),
+        storage=FileTokenStorage(user_id),
         redirect_handler=redirect_handler,
         callback_handler=callback_handler,
     )

@@ -108,12 +108,12 @@ def test_robinhood_provider_without_credentials_fails_closed(rh_env, monkeypatch
     from src.services.quotes import QuoteUnavailable, get_quote
     from src.services.robinhood_mcp import MCPCallFailed
 
-    def unauthenticated(tool, arguments, **kwargs):
+    def unauthenticated(tool, arguments, user_id=None, **kwargs):
         raise MCPCallFailed("not authenticated to Robinhood; run scripts/robinhood_login.py")
 
     monkeypatch.setattr(instruments, "call_tool", unauthenticated)
     with pytest.raises(QuoteUnavailable):
-        get_quote("SPY", "2026-08-21", 750, "C", 1.81, source="robinhood", cache_ttl_sec=0)
+        get_quote("SPY", "2026-08-21", 750, "C", 1.81, source="robinhood", cache_ttl_sec=0, user_id=1)
 
 
 # --- Robinhood MCP quote provider ------------------------------------------
@@ -128,7 +128,7 @@ def rh_env(tmp_path, monkeypatch):
 
     monkeypatch.setattr(core_db, "DB_PATH", str(tmp_path / "rh.db"))
     core_db.init_db()
-    monkeypatch.setattr(rh, "have_credentials", lambda: True)
+    monkeypatch.setattr(rh, "have_credentials", lambda user_id: True)
     limits.reset()
     quotes.clear_cache()
 
@@ -146,7 +146,7 @@ def _responder(instrument_result, quote_result=None):
     """Builds an MCP handler; an Exception value is raised instead of returned."""
     seen = []
 
-    def handler(tool, arguments, **kwargs):
+    def handler(tool, arguments, user_id=None, **kwargs):
         seen.append(tool)
         source = instrument_result if tool == "get_option_instruments" else quote_result
         if isinstance(source, Exception):
@@ -164,7 +164,7 @@ def test_robinhood_quote_returns_real_bid_ask(rh_env):
                          {"quotes": [{"bid_price": "1.80", "ask_price": "1.86"}]})
     rh_env(handler)
 
-    quote = get_quote("SPY", "2026-08-21", 750, "C", 1.81, source="robinhood", cache_ttl_sec=0)
+    quote = get_quote("SPY", "2026-08-21", 750, "C", 1.81, source="robinhood", cache_ttl_sec=0, user_id=1)
     assert quote == {"bid": 1.80, "ask": 1.86}
 
 
@@ -177,11 +177,11 @@ def test_instrument_uuid_is_cached_across_quotes(rh_env):
                          {"quotes": [{"bid_price": "1.80", "ask_price": "1.86"}]})
     rh_env(handler)
 
-    get_quote("SPY", "2026-08-21", 750, "C", 1.81, source="robinhood", cache_ttl_sec=0)
+    get_quote("SPY", "2026-08-21", 750, "C", 1.81, source="robinhood", cache_ttl_sec=0, user_id=1)
     assert handler.seen == ["get_option_instruments", "get_option_quotes"]
 
     handler.seen.clear()
-    get_quote("SPY", "2026-08-21", 750, "C", 1.81, source="robinhood", cache_ttl_sec=0)
+    get_quote("SPY", "2026-08-21", 750, "C", 1.81, source="robinhood", cache_ttl_sec=0, user_id=1)
     assert handler.seen == ["get_option_quotes"]
 
 
@@ -201,7 +201,7 @@ def test_bad_market_data_fails_closed(rh_env, label, instruments, quote):
 
     rh_env(_responder(instruments, quote))
     with pytest.raises(QuoteUnavailable):
-        get_quote("SPY", "2026-08-21", 750, "C", 1.81, source="robinhood", cache_ttl_sec=0)
+        get_quote("SPY", "2026-08-21", 750, "C", 1.81, source="robinhood", cache_ttl_sec=0, user_id=1)
 
 
 def test_mcp_failure_fails_closed(rh_env):
@@ -210,7 +210,7 @@ def test_mcp_failure_fails_closed(rh_env):
 
     rh_env(_responder(MCPCallFailed("token expired: 401")))
     with pytest.raises(QuoteUnavailable) as excinfo:
-        get_quote("SPY", "2026-08-21", 750, "C", 1.81, source="robinhood", cache_ttl_sec=0)
+        get_quote("SPY", "2026-08-21", 750, "C", 1.81, source="robinhood", cache_ttl_sec=0, user_id=1)
     assert "401" in str(excinfo.value)
 
 
@@ -232,9 +232,67 @@ def test_account_must_be_agentic_and_options_enabled(rh_env):
                         "option_level": "option_level_2"}]}, False),
     ]
     for payload, expected in cases:
-        rh_env(lambda tool, args, **kw: payload)
-        ok, reason = rh.account_is_tradeable("X1")
+        rh_env(lambda tool, args, user_id=None, **kw: payload)
+        ok, reason = rh.account_is_tradeable("X1", user_id=1)
         assert ok is expected, f"{payload} -> {reason}"
+
+
+# --- Per-user Robinhood credentials ----------------------------------------
+
+def test_credentials_are_isolated_per_user(tmp_path, monkeypatch):
+    """Tenants are different people with their own Robinhood logins, so one
+    user's token must never satisfy another's authentication check."""
+    import asyncio
+
+    import src.services.robinhood_auth as auth
+    from mcp.shared.auth import OAuthToken
+
+    monkeypatch.setattr(auth, "PROJECT_ROOT", str(tmp_path))
+
+    assert auth.token_path(1) != auth.token_path(2)
+    assert not auth.have_credentials(1)
+    assert not auth.have_credentials(2)
+
+    asyncio.run(auth.FileTokenStorage(1).set_tokens(
+        OAuthToken(access_token="user-one-token", token_type="Bearer")))
+
+    assert auth.have_credentials(1)
+    assert not auth.have_credentials(2), "user 2 must not inherit user 1's login"
+
+
+def test_legacy_token_migrates_only_when_owner_is_unambiguous(tmp_path, monkeypatch):
+    """The original design wrote one process-wide token. Adopting it is safe
+    only when a single user exists; otherwise its owner is unknowable."""
+    import src.core.db as core_db
+    import src.services.robinhood_auth as auth
+
+    monkeypatch.setattr(core_db, "DB_PATH", str(tmp_path / "m.db"))
+    monkeypatch.setattr(auth, "PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setattr(auth, "LEGACY_TOKEN_PATH", str(tmp_path / ".robinhood_token.json"))
+    core_db.init_db()
+
+    conn = core_db.get_connection()
+    conn.execute("INSERT INTO users (username, password_hash) VALUES ('solo','h')")
+    conn.commit()
+    conn.close()
+
+    with open(auth.LEGACY_TOKEN_PATH, "w") as handle:
+        handle.write('{"tokens": {"access_token": "legacy"}}')
+
+    assert auth.migrate_legacy_token() == 1
+    assert auth.have_credentials(1)
+    assert not os.path.exists(auth.LEGACY_TOKEN_PATH)
+
+    # With a second user present, an unclaimed legacy file must be left alone.
+    conn = core_db.get_connection()
+    conn.execute("INSERT INTO users (username, password_hash) VALUES ('second','h')")
+    conn.commit()
+    conn.close()
+    with open(auth.LEGACY_TOKEN_PATH, "w") as handle:
+        handle.write('{"tokens": {"access_token": "legacy"}}')
+
+    assert auth.migrate_legacy_token() is None
+    assert os.path.exists(auth.LEGACY_TOKEN_PATH)
 
 
 # --- Broker API budget -----------------------------------------------------
@@ -247,7 +305,7 @@ def fake_provider(monkeypatch):
 
     calls = {"n": 0}
 
-    def provider(ticker, expiry, strike, option_type, reference_price):
+    def provider(ticker, expiry, strike, option_type, reference_price, user_id=None):
         calls["n"] += 1
         return {"bid": 1.00, "ask": 1.05}
 
@@ -270,7 +328,7 @@ def test_rate_limiter_caps_broker_calls(fake_provider):
     for strike in range(200):
         try:
             get_quote("SPY", "2030-01-01", strike, "C", 1.0,
-                      source="fake", cache_ttl_sec=0, max_calls_per_min=60)
+                      source="fake", cache_ttl_sec=0, max_calls_per_min=60, user_id=1)
             succeeded += 1
         except QuoteUnavailable:
             refused += 1
@@ -286,7 +344,7 @@ def test_quote_cache_dedups_identical_contracts(fake_provider):
 
     for _ in range(10):
         get_quote("SPY", "2030-01-01", 750, "C", 1.0,
-                  source="fake", cache_ttl_sec=30, max_calls_per_min=60)
+                  source="fake", cache_ttl_sec=30, max_calls_per_min=60, user_id=1)
 
     assert fake_provider["n"] == 1
 
@@ -310,11 +368,11 @@ def test_rate_limited_quote_fails_closed(fake_provider):
 
     for strike in range(60):
         get_quote("SPY", "2030-01-01", strike, "C", 1.0,
-                  source="fake", cache_ttl_sec=0, max_calls_per_min=60)
+                  source="fake", cache_ttl_sec=0, max_calls_per_min=60, user_id=1)
 
     with pytest.raises(QuoteUnavailable) as excinfo:
         get_quote("SPY", "2030-01-01", 999, "C", 1.0,
-                  source="fake", cache_ttl_sec=0, max_calls_per_min=60)
+                  source="fake", cache_ttl_sec=0, max_calls_per_min=60, user_id=1)
     assert "rate limit" in str(excinfo.value).lower()
 
 

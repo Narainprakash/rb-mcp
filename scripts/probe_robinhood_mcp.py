@@ -350,13 +350,25 @@ async def probe_tools(url, token=None):
     auth = None
     headers = {"Authorization": f"Bearer {token}"} if token else None
     try:
-        from src.services.robinhood_auth import TOKEN_PATH, build_oauth_provider, have_credentials
-        if have_credentials():
-            print("  Using stored OAuth credentials (scripts/robinhood_login.py).")
-            auth, headers = build_oauth_provider(), None
+        from src.core.db import get_connection
+        from src.services.robinhood_auth import build_oauth_provider, have_credentials
+
+        # Credentials are per dashboard user; probe with the first user that has
+        # any, since this only lists tools and the answer is the same for all.
+        conn = get_connection()
+        try:
+            user_ids = [r["id"] for r in conn.execute(
+                "SELECT id FROM users WHERE is_active = 1 ORDER BY id").fetchall()]
+        finally:
+            conn.close()
+
+        authorized = next((uid for uid in user_ids if have_credentials(uid)), None)
+        if authorized:
+            print(f"  Using stored OAuth credentials for user {authorized}.")
+            auth, headers = build_oauth_provider(authorized), None
         elif not token:
-            print(f"  No usable credentials in {TOKEN_PATH}.")
-            print("  Run: venv/bin/python scripts/robinhood_login.py")
+            print("  No user has authorized yet.")
+            print("  Run: venv/bin/python scripts/robinhood_login.py --user <username>")
             print("  Continuing unauthenticated - expect a 401.")
     except ImportError as e:
         # Never swallow this: a silent import failure here looks exactly like

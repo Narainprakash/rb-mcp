@@ -90,7 +90,7 @@ def process_open_orders():
             # Check 0DTE Cutoff rule
             if is_0dte and current_time >= cutoff_time:
                 # Force Market Sell
-                quote = get_live_quote(order['ticker'], order['expiry'], order['strike'], order['option_type'], order['average_cost'])
+                quote = get_live_quote(order['ticker'], order['expiry'], order['strike'], order['option_type'], order['average_cost'], user_id=user_id)
                 fill_price = quote['bid'] # Market sell hits the bid
 
                 pnl_dollars = round((fill_price - order['average_cost']) * order['total_quantity'] * 100, 2)
@@ -110,7 +110,7 @@ def process_open_orders():
 
             # Check for limit fill (Paper Mode Simulation)
             if paper_mode:
-                quote = get_live_quote(order['ticker'], order['expiry'], order['strike'], order['option_type'], order['average_cost'])
+                quote = get_live_quote(order['ticker'], order['expiry'], order['strike'], order['option_type'], order['average_cost'], user_id=user_id)
                 if quote['bid'] >= order['target_price']:
                     # Simulate Fill
                     pnl_dollars = round((order['target_price'] - order['average_cost']) * order['total_quantity'] * 100, 2)
@@ -171,7 +171,7 @@ def process_open_orders():
                     continue
 
             if paper_mode:
-                quote = get_live_quote(order['ticker'], order['expiry'], order['strike'], order['option_type'], order['target_price'])
+                quote = get_live_quote(order['ticker'], order['expiry'], order['strike'], order['option_type'], order['target_price'], user_id=user_id)
                 # Buy order fills if ask drops to target price
                 if quote['ask'] <= order['target_price']:
                     # Import here to avoid circular imports if any

@@ -25,8 +25,10 @@ env/
 HALT
 HALT_TRADING
 
-# Robinhood OAuth tokens - grants trading access to the agentic account
-.robinhood_token.json
+# Robinhood OAuth tokens - grants trading access to the agentic account.
+# One file per dashboard user (.robinhood_token.<user_id>.json), plus the
+# legacy process-wide file from before credentials were per-user.
+.robinhood_token*.json
 
 # Python Cache
 __pycache__/

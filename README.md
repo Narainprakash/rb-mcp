@@ -456,14 +456,24 @@ This will trigger the browser-based authentication flow. Complete it when prompt
 
 Registering the MCP with the Hermes Agent (4.2) lets **the agent** query Robinhood. It does not let the **trading bot** do anything — they are separate processes, and the agent's OAuth session is not shared. The bot holds its own credentials.
 
-Log the bot in once:
+**Credentials are per dashboard user.** Each user authorizes their own Robinhood login, so tenants are different people with genuinely separate broker accounts — one user's token never routes another user's orders.
+
 ```bash
-cd ~/rb-mcp && venv/bin/python scripts/robinhood_login.py
+cd ~/rb-mcp && venv/bin/python scripts/robinhood_login.py --user narain_prakash
 ```
 
-It prints an authorization URL. Open it in a **desktop** browser, approve access for your **agentic** account, then paste back the URL your browser lands on. That page will fail to load (`http://localhost:8421/callback`) — expected, nothing is listening there; only the `?code=...` in the address bar matters.
+`--user` is optional when only one user exists; with several it is required, and the script lists them rather than guessing.
 
-Tokens are cached in `.robinhood_token.json` (mode `0600`, gitignored). The refresh grant means this is a **one-time** step that survives restarts.
+It prints an authorization URL. Open it in a **desktop** browser, approve access for that person's **agentic** account, then paste back the URL your browser lands on. That page will fail to load (`http://localhost:8421/callback`) — expected, nothing is listening there; only the `?code=...` in the address bar matters.
+
+Tokens are cached per user in `.robinhood_token.<user_id>.json` (mode `0600`, gitignored). The refresh grant means this is a **one-time** step per user that survives restarts.
+
+Check who has authorized — the dashboard's Robinhood MCP card shows the logged-in user's own status, or:
+```bash
+ls -la ~/rb-mcp/.robinhood_token.*.json
+```
+
+> **Upgrading from the single-login version:** if a legacy `.robinhood_token.json` exists and there is exactly one user, it is adopted for that user automatically on the next login or restart. With several users its owner is ambiguous, so it is left alone and everyone re-authorizes.
 
 > **Why not reuse the agent's token?** It exists at `~/.hermes/mcp-tokens/robinhood.json`, but OAuth refresh tokens are typically single-use and rotating — refreshing it from the bot would invalidate the agent's copy and silently break your Telegram/WhatsApp Robinhood access. A separate registration avoids that race.
 
@@ -758,7 +768,11 @@ sqlite3 ~/rb-mcp/hermes_mt.db "SELECT username, robinhood_account_id FROM users;
 
 **Step 5 — Confirm.** The new user should see their own empty feed and positions. Nothing else changes: they share the single X poll, so adding users costs **no** additional Twitter API quota.
 
-> **⚠️ One Robinhood login per instance.** The OAuth credentials in `.robinhood_token.json` belong to the *process*, not to a dashboard user — so all users currently trade through whichever Robinhood account that login owns. `users.robinhood_account_id` is read on the live-order path but per-user routing is not finished (Section 9.4). **Do not run more than one user with `paper_mode: false`.**
+**Step 4b — Their Robinhood login.** Each user authorizes their own broker account (Section 4.2.1):
+```bash
+venv/bin/python scripts/robinhood_login.py --user their_username
+```
+Until they do, their quotes fail closed and their dashboard card reads *Needs login*. Nothing is shared: credentials live in separate `.robinhood_token.<user_id>.json` files.
 
 ### 9.1 What is per-user
 Every user gets their own decisions, trades, positions, limit orders, risk limits, notification targets, circuit-breaker state, and daily summary. Per-user overrides live in the `user_configs` table as JSON and are merged over the `config.yaml` defaults:
@@ -795,7 +809,10 @@ Editable from the dashboard settings modal, stored per user in `user_configs`:
 
 **Not user-settable, by design:** anything touching the shared X poll — cadence, windows, `target_account`, `include_retweets`, quota thresholds. All users share one monthly API quota, so one user changing the cadence would spend everyone else's budget.
 
-### 9.4 ⚠️ Per-user Robinhood routing is not implemented
-`users.robinhood_account_id` exists and is read when a live order is attempted, but there is no Robinhood MCP call to route it to yet (see the warning in Section 4.4). Until that lands, all users would share whichever single account the MCP session is authenticated against.
+### 9.4 Per-user broker isolation — what is and isn't done
 
-**Do not run more than one user with `paper_mode: false`.**
+**Done:** each user has their own Robinhood OAuth login and token file, and every broker call (quotes, contract lookups, account checks) is made with that user's credentials. Two users cannot see or spend each other's broker access.
+
+**Not done:** order placement itself. `src/services/executor.py` still makes no `place_option_order` call, so `paper_mode: false` is force-failed back to paper for everyone (Section 4.4). `users.robinhood_account_id` is read on that path and will supply the `account_number` the order tools require, but it is not exercised yet.
+
+So multi-user **paper** trading with real per-user quotes is fully supported today. Live trading is not — for anyone.
