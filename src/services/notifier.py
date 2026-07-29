@@ -44,6 +44,30 @@ def send_discord_message(user_id: int, event_type: str, message: str, force: boo
     except Exception as e:
         print(f"Failed to send Discord notification for User {user_id}: {e}")
 
+def hermes_send(target: str, message: str):
+    """Sends via the Hermes gateway CLI. Returns None on success, else the reason.
+
+    The CLI's output is captured, so the reason has to be surfaced deliberately:
+    logging only "returned non-zero exit status 1" hides the actual cause - a
+    dead bridge, a bad target, an unlinked session - and made a full day of
+    dropped notifications impossible to diagnose from the logs.
+    """
+    try:
+        subprocess.run(
+            ["hermes", "send", "--to", target, message],
+            check=True, capture_output=True, timeout=NOTIFY_TIMEOUT_SEC,
+        )
+        return None
+    except subprocess.CalledProcessError as e:
+        return ((e.stderr or b"").decode(errors="replace").strip()
+                or (e.stdout or b"").decode(errors="replace").strip()
+                or f"exit status {e.returncode}")
+    except subprocess.TimeoutExpired:
+        return f"timed out after {NOTIFY_TIMEOUT_SEC}s"
+    except Exception as e:
+        return f"{type(e).__name__}: {e}"
+
+
 def send_whatsapp_message(user_id: int, event_type: str, message: str, force: bool = False):
     """
     Sends a message via the local Hermes WhatsApp bridge using the 'hermes send' CLI
@@ -58,10 +82,9 @@ def send_whatsapp_message(user_id: int, event_type: str, message: str, force: bo
         
     targets = config.notifications.get('whatsapp_trade_targets', ["whatsapp"])
     for target in targets:
-        try:
-            subprocess.run(["hermes", "send", "--to", target, message], check=True, capture_output=True, timeout=NOTIFY_TIMEOUT_SEC)
-        except Exception as e:
-            print(f"Failed to send WhatsApp notification to {target} (User {user_id}): {e}")
+        reason = hermes_send(target, message)
+        if reason:
+            print(f"Failed to send WhatsApp notification to {target} (User {user_id}): {reason}")
 
 def forward_raw_tweet(raw_text: str):
     """
@@ -71,10 +94,9 @@ def forward_raw_tweet(raw_text: str):
         config = get_user_config(user_id)
         targets = config.notifications.get('whatsapp_forward_targets', ["whatsapp"])
         for target in targets:
-            try:
-                subprocess.run(["hermes", "send", "--to", target, raw_text], check=True, capture_output=True, timeout=NOTIFY_TIMEOUT_SEC)
-            except Exception as e:
-                print(f"Failed to forward raw tweet to {target} (User {user_id}): {e}")
+            reason = hermes_send(target, raw_text)
+            if reason:
+                print(f"Failed to forward raw tweet to {target} (User {user_id}): {reason}")
 
 def notify_alert(ticker: str, expiry: str, strike: float, option_type: str, price: float, style: str, action: str = "BTO"):
     """Global alert, notifies all active users if enabled."""

@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from src.core.config import get_user_config, system_config
 from src.core.db import get_connection, log_system_event
 from src.core.time_utils import NY_TZ, is_market_open_today
-from src.services.notifier import NOTIFY_TIMEOUT_SEC
+from src.services.notifier import NOTIFY_TIMEOUT_SEC, hermes_send
 
 def get_daily_metrics(user_id: int, date_str: str):
     """Fetches PnL, Trades, Alerts, Open Positions, API calls, and Win Rate for the given NY date string."""
@@ -63,12 +63,12 @@ def send_summary_notification(user_id: int, summary_text: str):
     config = get_user_config(user_id)
     targets = config.summary.get('targets', ["whatsapp"])
     for target in targets:
-        try:
-            subprocess.run(["hermes", "send", "--to", target, summary_text], check=True, capture_output=True, timeout=NOTIFY_TIMEOUT_SEC)
+        reason = hermes_send(target, summary_text)
+        if reason:
+            print(f"Failed to send daily summary to {target} for user {user_id}: {reason}")
+            log_system_event('error', f"Summary push failed for {target}: {reason}", user_id=user_id)
+        else:
             print(f"Daily summary sent to {target} for user {user_id}")
-        except Exception as e:
-            print(f"Failed to send daily summary to {target} for user {user_id}: {e}")
-            log_system_event('error', f"Summary push failed for {target}: {e}", user_id=user_id)
 
 def _last_summary_date(user_id):
     """The NY date this user was last sent a summary, from the database.
