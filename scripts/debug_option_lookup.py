@@ -116,16 +116,32 @@ def main():
         "type": api_type,
     }, user_id)
 
-    # No strike at all: proves the chain+expiry are right and reveals the exact
-    # strike_price string format the server uses.
-    attempt("6. Expiry only, no strike (shows real strike formatting)", "get_option_instruments", {
+    # The quote response shape matters just as much: it is parsed by the same
+    # inference that got the instruments payload wrong.
+    exact = attempt("6. EXACT query again, to capture the instrument id", "get_option_instruments", {
         "chain_symbol": ticker.upper(),
         "expiration_dates": expiry,
+        "strike_price": f"{float(strike):.4f}",
         "type": api_type,
+        "state": "active",
+        "tradability": "tradable",
     }, user_id)
 
-    print(f"\n{'=' * 70}\nPaste this output back - the key names and the strike_price")
-    print("formatting are what the provider needs to be corrected against.")
+    instrument_id = None
+    if isinstance(exact, dict):
+        candidates = exact.get("instruments") or (exact.get("data") or {}).get("instruments") or []
+        if candidates:
+            instrument_id = candidates[0].get("id")
+
+    if instrument_id:
+        print(f"\n  -> resolved instrument id: {instrument_id}")
+        attempt("7. QUOTE for that instrument (verifies bid/ask field names)",
+                "get_option_quotes", {"instrument_ids": [instrument_id]}, user_id)
+    else:
+        print("\n  Could not extract an instrument id, so the quote step is skipped.")
+
+    print(f"\n{'=' * 70}\nWhat matters here: the exact key path to the payload, and the")
+    print("field names carrying bid/ask in step 7.")
     return 0
 
 

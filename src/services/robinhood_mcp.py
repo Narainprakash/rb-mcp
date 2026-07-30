@@ -96,9 +96,26 @@ def call_tool(tool_name, arguments, user_id, max_calls_per_min=None, timeout=45)
     if not payload:
         raise MCPCallFailed(f"{tool_name} returned no content")
     try:
-        return json.loads(payload)
+        return unwrap_envelope(json.loads(payload))
     except ValueError:
         raise MCPCallFailed(f"{tool_name} returned non-JSON content: {payload[:200]}")
+
+
+def unwrap_envelope(parsed):
+    """Strips the MCP's {"data": ..., "guide": "..."} wrapper.
+
+    Every Robinhood tool returns its real payload under "data", alongside a
+    "guide" string of LLM-facing prose. Reading the payload keys at the top
+    level - which is what the schema descriptions implied - silently finds
+    nothing: it is why every alert on 2026-07-29 skipped with "no tradable
+    contract found" while the query itself was correct.
+
+    Unwrapping here rather than per-caller means quotes, instruments, accounts
+    and every future tool are all handled once.
+    """
+    if isinstance(parsed, dict) and "data" in parsed:
+        return parsed["data"]
+    return parsed
 
 
 def _text_of(result):

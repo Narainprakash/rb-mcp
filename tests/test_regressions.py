@@ -157,6 +157,26 @@ def _responder(instrument_result, quote_result=None):
     return handler
 
 
+def test_mcp_envelope_is_unwrapped():
+    """Every Robinhood tool wraps its payload as {"data": ..., "guide": "..."}.
+
+    Reading payload keys at the top level - what the schema descriptions implied
+    - silently finds nothing, which is why every alert on 2026-07-29 skipped
+    with "no tradable contract found" despite a correct query.
+    """
+    from src.services.robinhood_mcp import unwrap_envelope
+
+    enveloped = {
+        "data": {"instruments": [{"id": "uuid-1", "strike_price": "736.0000"}]},
+        "guide": "LLM-facing prose that must not be mistaken for payload",
+    }
+    assert unwrap_envelope(enveloped) == {"instruments": [{"id": "uuid-1", "strike_price": "736.0000"}]}
+
+    # Unenveloped payloads and lists must pass through untouched.
+    assert unwrap_envelope({"instruments": []}) == {"instruments": []}
+    assert unwrap_envelope([1, 2]) == [1, 2]
+
+
 def test_robinhood_quote_returns_real_bid_ask(rh_env):
     from src.services.quotes import get_quote
 
