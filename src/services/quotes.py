@@ -77,11 +77,21 @@ def _robinhood_quote(ticker, expiry, strike, option_type, reference_price, user_
         # worse than not trading.
         raise QuoteUnavailable(str(e))
 
-    quotes = data.get("quotes") if isinstance(data, dict) else data
-    if not isinstance(quotes, list) or not quotes:
+    # Verified against a live response: get_option_quotes returns
+    #   {"results": [{"quote": {"bid_price": "1.89", "ask_price": "1.93", ...},
+    #                 "close": {...}}]}
+    # Prices are strings. The bid/ask live one level below each result, under
+    # "quote" - alongside a "close" block that must not be mistaken for them.
+    results = data.get("results") if isinstance(data, dict) else None
+    if not isinstance(results, list) or not results:
         raise QuoteUnavailable(f"no quote returned for {ticker} {strike}{option_type}")
 
-    quote = quotes[0]
+    quote = results[0].get("quote") if isinstance(results[0], dict) else None
+    if not isinstance(quote, dict):
+        raise QuoteUnavailable(
+            f"quote block missing for {ticker} {strike}{option_type}"
+        )
+
     try:
         bid = float(quote["bid_price"])
         ask = float(quote["ask_price"])

@@ -142,6 +142,23 @@ def rh_env(tmp_path, monkeypatch):
     return install
 
 
+def _live_quote(bid, ask):
+    """The real get_option_quotes shape, captured from the live server.
+
+    Earlier fixtures used {"quotes": [{"bid_price": ...}]}, which was my
+    misreading of the schema. Those tests passed while production failed - so
+    these mocks now mirror an actual response, extra keys included.
+    """
+    return {"results": [{
+        "quote": {
+            "instrument_id": "uuid-1",
+            "bid_price": bid, "ask_price": ask,
+            "mark_price": "1.91", "volume": 12442,
+        },
+        "close": {"price": "8.62", "date": "2026-07-28"},
+    }]}
+
+
 def _responder(instrument_result, quote_result=None):
     """Builds an MCP handler; an Exception value is raised instead of returned."""
     seen = []
@@ -180,12 +197,11 @@ def test_mcp_envelope_is_unwrapped():
 def test_robinhood_quote_returns_real_bid_ask(rh_env):
     from src.services.quotes import get_quote
 
-    handler = _responder({"instruments": [{"id": "uuid-1"}]},
-                         {"quotes": [{"bid_price": "1.80", "ask_price": "1.86"}]})
+    handler = _responder({"instruments": [{"id": "uuid-1"}]}, _live_quote("1.890000", "1.930000"))
     rh_env(handler)
 
     quote = get_quote("SPY", "2026-08-21", 750, "C", 1.81, source="robinhood", cache_ttl_sec=0, user_id=1)
-    assert quote == {"bid": 1.80, "ask": 1.86}
+    assert quote == {"bid": 1.89, "ask": 1.93}
 
 
 def test_instrument_uuid_is_cached_across_quotes(rh_env):
@@ -193,8 +209,7 @@ def test_instrument_uuid_is_cached_across_quotes(rh_env):
     the lookup. Without this the monitor triples its broker usage."""
     from src.services.quotes import get_quote
 
-    handler = _responder({"instruments": [{"id": "uuid-1"}]},
-                         {"quotes": [{"bid_price": "1.80", "ask_price": "1.86"}]})
+    handler = _responder({"instruments": [{"id": "uuid-1"}]}, _live_quote("1.890000", "1.930000"))
     rh_env(handler)
 
     get_quote("SPY", "2026-08-21", 750, "C", 1.81, source="robinhood", cache_ttl_sec=0, user_id=1)
@@ -208,12 +223,18 @@ def test_instrument_uuid_is_cached_across_quotes(rh_env):
 @pytest.mark.parametrize("label,instruments,quote", [
     ("ambiguous match", {"instruments": [{"id": "a"}, {"id": "b"}]}, None),
     ("no contract", {"instruments": []}, None),
-    ("crossed market", {"instruments": [{"id": "c"}]},
-     {"quotes": [{"bid_price": "2.00", "ask_price": "1.00"}]}),
-    ("zero ask", {"instruments": [{"id": "d"}]},
-     {"quotes": [{"bid_price": "0", "ask_price": "0"}]}),
-    ("malformed payload", {"instruments": [{"id": "e"}]}, {"quotes": [{"foo": "bar"}]}),
-    ("empty quotes", {"instruments": [{"id": "f"}]}, {"quotes": []}),
+    ("crossed market", {"instruments": [{"id": "c"}]}, _live_quote("2.00", "1.00")),
+    ("zero ask", {"instruments": [{"id": "d"}]}, _live_quote("0", "0")),
+    ("malformed quote block", {"instruments": [{"id": "e"}]}, {"results": [{"quote": {"foo": "bar"}}]}),
+    ("empty results", {"instruments": [{"id": "f"}]}, {"results": []}),
+    # A result carrying only "close" and no "quote" - the close block must never
+    # be mistaken for a live price.
+    ("quote block absent", {"instruments": [{"id": "g"}]},
+     {"results": [{"close": {"price": "8.62"}}]}),
+    # The old, wrong shape: if the server ever returned this we must skip, not
+    # silently succeed on a key that no longer means anything.
+    ("legacy 'quotes' shape", {"instruments": [{"id": "h"}]},
+     {"quotes": [{"bid_price": "1.80", "ask_price": "1.86"}]}),
 ])
 def test_bad_market_data_fails_closed(rh_env, label, instruments, quote):
     """Every bad-data path must skip the signal, never invent or guess a price."""
