@@ -60,32 +60,53 @@ def resolve_instrument_id(ticker, expiry, strike, option_type, user_id):
     if not api_type:
         raise MCPCallFailed(f"unknown option type {option_type!r}")
 
+    # state/tradability are filtered client-side rather than passed as query
+    # parameters. On 2026-07-31 a 0DTE contract (SPY 7/31 745C) that provably
+    # existed returned nothing when those filters were sent, while a non-0DTE
+    # contract resolved fine minutes later on the same code. Asking for the
+    # contract and judging the record ourselves removes the dependency on
+    # server-side filter semantics, and makes a rejection say *why*.
     data = call_tool("get_option_instruments", {
         "chain_symbol": ticker.upper(),
         "expiration_dates": expiry,
         # The API wants a fixed-precision string, e.g. '750.0000'.
         "strike_price": f"{float(strike):.4f}",
         "type": api_type,
-        "state": "active",
-        "tradability": "tradable",
     }, user_id=user_id)
 
     instruments = data.get("instruments") if isinstance(data, dict) else data
     if not isinstance(instruments, list) or not instruments:
         raise MCPCallFailed(
-            f"no tradable contract found for {ticker} {expiry} {strike}{option_type}"
+            f"contract does not exist: {ticker} {expiry} {strike}{option_type}"
+        )
+
+    tradeable = [
+        i for i in instruments
+        if str(i.get("state", "")).lower() == "active"
+        and str(i.get("tradability", "")).lower() == "tradable"
+    ]
+
+    if not tradeable:
+        # The contract exists but is not tradeable - report its actual state so
+        # the reason is visible instead of a bare "not found".
+        seen = ", ".join(
+            f"state={i.get('state')!r}/tradability={i.get('tradability')!r}"
+            for i in instruments[:3]
+        )
+        raise MCPCallFailed(
+            f"{ticker} {expiry} {strike}{option_type} exists but is not tradeable ({seen})"
         )
 
     # Filters were exact, so a single match is expected. More than one means the
     # assumption is wrong somewhere - refuse rather than pick arbitrarily, since
     # the wrong UUID is the wrong contract.
-    if len(instruments) > 1:
+    if len(tradeable) > 1:
         raise MCPCallFailed(
-            f"{len(instruments)} contracts matched {ticker} {expiry} {strike}{option_type}; "
+            f"{len(tradeable)} contracts matched {ticker} {expiry} {strike}{option_type}; "
             "refusing to guess which one"
         )
 
-    instrument_id = instruments[0].get("id")
+    instrument_id = tradeable[0].get("id")
     if not instrument_id:
         raise MCPCallFailed("contract lookup returned no instrument id")
 

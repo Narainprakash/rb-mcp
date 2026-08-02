@@ -197,7 +197,7 @@ def test_mcp_envelope_is_unwrapped():
 def test_robinhood_quote_returns_real_bid_ask(rh_env):
     from src.services.quotes import get_quote
 
-    handler = _responder({"instruments": [{"id": "uuid-1"}]}, _live_quote("1.890000", "1.930000"))
+    handler = _responder({"instruments": [_instrument("uuid-1")]}, _live_quote("1.890000", "1.930000"))
     rh_env(handler)
 
     quote = get_quote("SPY", "2026-08-21", 750, "C", 1.81, source="robinhood", cache_ttl_sec=0, user_id=1)
@@ -209,7 +209,7 @@ def test_instrument_uuid_is_cached_across_quotes(rh_env):
     the lookup. Without this the monitor triples its broker usage."""
     from src.services.quotes import get_quote
 
-    handler = _responder({"instruments": [{"id": "uuid-1"}]}, _live_quote("1.890000", "1.930000"))
+    handler = _responder({"instruments": [_instrument("uuid-1")]}, _live_quote("1.890000", "1.930000"))
     rh_env(handler)
 
     get_quote("SPY", "2026-08-21", 750, "C", 1.81, source="robinhood", cache_ttl_sec=0, user_id=1)
@@ -220,20 +220,63 @@ def test_instrument_uuid_is_cached_across_quotes(rh_env):
     assert handler.seen == ["get_option_quotes"]
 
 
+def _instrument(instrument_id, state="active", tradability="tradable"):
+    """A contract record as the server returns it."""
+    return {"id": instrument_id, "state": state, "tradability": tradability,
+            "strike_price": "745.0000", "expiration_date": "2026-07-31"}
+
+
+def test_untradeable_contract_reports_why(rh_env):
+    """A contract that exists but is not tradeable must say so.
+
+    'no tradable contract found' was indistinguishable from 'does not exist',
+    which cost a day of diagnosis after the 2026-07-31 0DTE skip.
+    """
+    from src.services.quotes import QuoteUnavailable, get_quote
+
+    rh_env(_responder({"instruments": [_instrument("x", state="expired")]}))
+    with pytest.raises(QuoteUnavailable) as excinfo:
+        get_quote("SPY", "2026-07-31", 745, "C", 1.66, source="robinhood", cache_ttl_sec=0, user_id=1)
+    message = str(excinfo.value)
+    assert "exists but is not tradeable" in message
+    assert "expired" in message
+
+
+def test_missing_contract_distinguished_from_untradeable(rh_env):
+    from src.services.quotes import QuoteUnavailable, get_quote
+
+    rh_env(_responder({"instruments": []}))
+    with pytest.raises(QuoteUnavailable) as excinfo:
+        get_quote("SPY", "2026-07-31", 745, "C", 1.66, source="robinhood", cache_ttl_sec=0, user_id=1)
+    assert "does not exist" in str(excinfo.value)
+
+
+def test_tradeable_contract_selected_from_mixed_results(rh_env):
+    """Client-side filtering: pick the tradeable record, ignore the rest."""
+    from src.services.quotes import get_quote
+
+    rh_env(_responder(
+        {"instruments": [_instrument("dead", tradability="untradable"), _instrument("live")]},
+        _live_quote("1.60", "1.66"),
+    ))
+    quote = get_quote("SPY", "2026-07-31", 745, "C", 1.66, source="robinhood", cache_ttl_sec=0, user_id=1)
+    assert quote == {"bid": 1.60, "ask": 1.66}
+
+
 @pytest.mark.parametrize("label,instruments,quote", [
-    ("ambiguous match", {"instruments": [{"id": "a"}, {"id": "b"}]}, None),
+    ("ambiguous match", {"instruments": [_instrument("a"), _instrument("b")]}, None),
     ("no contract", {"instruments": []}, None),
-    ("crossed market", {"instruments": [{"id": "c"}]}, _live_quote("2.00", "1.00")),
-    ("zero ask", {"instruments": [{"id": "d"}]}, _live_quote("0", "0")),
-    ("malformed quote block", {"instruments": [{"id": "e"}]}, {"results": [{"quote": {"foo": "bar"}}]}),
-    ("empty results", {"instruments": [{"id": "f"}]}, {"results": []}),
+    ("crossed market", {"instruments": [_instrument("c")]}, _live_quote("2.00", "1.00")),
+    ("zero ask", {"instruments": [_instrument("d")]}, _live_quote("0", "0")),
+    ("malformed quote block", {"instruments": [_instrument("e")]}, {"results": [{"quote": {"foo": "bar"}}]}),
+    ("empty results", {"instruments": [_instrument("f")]}, {"results": []}),
     # A result carrying only "close" and no "quote" - the close block must never
     # be mistaken for a live price.
-    ("quote block absent", {"instruments": [{"id": "g"}]},
+    ("quote block absent", {"instruments": [_instrument("g")]},
      {"results": [{"close": {"price": "8.62"}}]}),
     # The old, wrong shape: if the server ever returned this we must skip, not
     # silently succeed on a key that no longer means anything.
-    ("legacy 'quotes' shape", {"instruments": [{"id": "h"}]},
+    ("legacy 'quotes' shape", {"instruments": [_instrument("h")]},
      {"quotes": [{"bid_price": "1.80", "ask_price": "1.86"}]}),
 ])
 def test_bad_market_data_fails_closed(rh_env, label, instruments, quote):
